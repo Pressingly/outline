@@ -21,6 +21,7 @@ import DocumentAddGroupNotificationsTask from "../tasks/DocumentAddGroupNotifica
 import DocumentAddUserNotificationsTask from "../tasks/DocumentAddUserNotificationsTask";
 import DocumentPublishedNotificationsTask from "../tasks/DocumentPublishedNotificationsTask";
 import RevisionCreatedNotificationsTask from "../tasks/RevisionCreatedNotificationsTask";
+import ShareSubscriptionNotificationsTask from "../tasks/ShareSubscriptionNotificationsTask";
 import BaseProcessor from "./BaseProcessor";
 
 export default class NotificationsProcessor extends BaseProcessor {
@@ -95,6 +96,7 @@ export default class NotificationsProcessor extends BaseProcessor {
 
   async revisionCreated(event: RevisionEvent) {
     await new RevisionCreatedNotificationsTask().schedule(event);
+    await new ShareSubscriptionNotificationsTask().schedule(event);
   }
 
   async collectionCreated(event: CollectionEvent) {

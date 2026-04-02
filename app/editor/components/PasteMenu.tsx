@@ -1,15 +1,16 @@
 import { observer } from "mobx-react";
 import { v4 as uuidv4 } from "uuid";
-import { BrowserIcon, EmailIcon, LinkIcon } from "outline-icons";
-import React, { useCallback } from "react";
+import { EmailIcon, LinkIcon } from "outline-icons";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { EmbedDescriptor } from "@shared/editor/embeds";
 import type { MenuItem } from "@shared/editor/types";
 import { MentionType } from "@shared/types";
-import { isUrl } from "@shared/utils/urls";
+import { isInternalUrl, isUrl } from "@shared/utils/urls";
 import type Integration from "~/models/Integration";
 import useCurrentUser from "~/hooks/useCurrentUser";
 import useStores from "~/hooks/useStores";
+import { client } from "~/utils/ApiClient";
 import { determineMentionType, isURLMentionable } from "~/utils/mention";
 import type { Props as SuggestionsMenuProps } from "./SuggestionsMenu";
 import SuggestionsMenu from "./SuggestionsMenu";
@@ -24,13 +25,16 @@ type Props = Omit<
   embeds: EmbedDescriptor[];
 };
 
+interface EmbedCheckState {
+  loading: boolean;
+  embeddable?: boolean;
+}
+
 export const PasteMenu = observer(({ pastedText, embeds, ...props }: Props) => {
   const items = useItems({ pastedText, embeds });
 
   const renderMenuItem = useCallback(
-    (item, _index, options) => (
-      <SuggestionsMenuItem {...options} title={item.title} icon={item.icon} />
-    ),
+    (item, _index, options) => <SuggestionsMenuItem {...options} {...item} />,
     []
   );
 
@@ -57,6 +61,48 @@ function useItems({
   const { t } = useTranslation();
   const { integrations } = useStores();
   const user = useCurrentUser({ rejectOnEmpty: false });
+  const [embedCheck, setEmbedCheck] = useState<EmbedCheckState>({
+    loading: false,
+  });
+
+  const singleUrl =
+    typeof pastedText === "string" && isUrl(pastedText) ? pastedText : null;
+  const isInternal = singleUrl ? isInternalUrl(singleUrl) : false;
+  const matchedEmbed = singleUrl
+    ? getMatchingEmbed(embeds, singleUrl)?.embed
+    : null;
+  const embed = matchedEmbed?.disabled ? null : matchedEmbed;
+
+  // Check embeddability for single URL
+  useEffect(() => {
+    if (!singleUrl || !embed || isInternal) {
+      setEmbedCheck({ loading: false });
+      return;
+    }
+
+    let cancelled = false;
+    setEmbedCheck({ loading: true });
+
+    client
+      .post<{ embeddable: boolean; reason?: string }>("/urls.checkEmbed", {
+        url: singleUrl,
+      })
+      .then((res) => {
+        if (!cancelled) {
+          setEmbedCheck({ loading: false, embeddable: res.embeddable });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          // Optimistic on error - allow embedding attempt
+          setEmbedCheck({ loading: false, embeddable: true });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [singleUrl, embed, isInternal]);
 
   // single item is pasted.
   if (typeof pastedText === "string") {
@@ -72,8 +118,6 @@ function useItems({
         ? determineMentionType({ url, integration })
         : MentionType.URL;
     }
-
-    const embed = getMatchingEmbed(embeds, pastedText)?.embed;
 
     return [
       {
@@ -99,7 +143,11 @@ function useItems({
       {
         name: "embed",
         title: t("Embed"),
-        visible: !!embed,
+        subtitle:
+          embedCheck.embeddable === false || isInternal
+            ? t("Not supported")
+            : undefined,
+        disabled: isInternal || embedCheck.loading || !embedCheck.embeddable,
         icon: embed?.icon,
         keywords: embed?.keywords,
       },
@@ -131,29 +179,8 @@ function useItems({
     return !!mentionType;
   });
 
-  // Check if the links can be converted to embeds.
-  let embedType: string | undefined = undefined;
-
-  const convertibleToEmbedList = pastedText.every((text) => {
-    const embed = getMatchingEmbed(embeds, text)?.embed;
-
-    if (!embed) {
-      return false;
-    }
-
-    embedType = !embedType || embedType === embed.title ? embed.title : "mixed";
-    return true;
-  });
-
-  const embedIcon =
-    embedType === "mixed" ? (
-      <BrowserIcon />
-    ) : (
-      embeds.find((e) => e.title === embedType)?.icon
-    );
-
-  // don't render the menu when it can't be converted to other types.
-  if (!convertibleToMentionList && !convertibleToEmbedList) {
+  // don't render the menu when it can't be converted to mentions.
+  if (!convertibleToMentionList) {
     return;
   }
 
@@ -169,13 +196,6 @@ function useItems({
       visible: !!convertibleToMentionList,
       icon: <EmailIcon />,
       attrs: { actorId: user?.id, ...linksToMentionType },
-    },
-    {
-      name: "embed_list",
-      title: t("Embed"),
-      visible: !!convertibleToEmbedList,
-      icon: embedIcon,
-      attrs: { actorId: user?.id },
     },
   ];
 }

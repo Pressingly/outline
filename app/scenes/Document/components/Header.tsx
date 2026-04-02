@@ -1,6 +1,6 @@
 import { observer } from "mobx-react";
 import { TableOfContentsIcon, EditIcon } from "outline-icons";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import styled, { useTheme } from "styled-components";
@@ -9,6 +9,7 @@ import useMeasure from "react-use-measure";
 import { altDisplay, metaDisplay } from "@shared/utils/keyboard";
 import type Document from "~/models/Document";
 import type Revision from "~/models/Revision";
+import type Template from "~/models/Template";
 import { Action, Separator } from "~/components/Actions";
 import Badge from "~/components/Badge";
 import Button from "~/components/Button";
@@ -20,7 +21,6 @@ import Header from "~/components/Header";
 import Star from "~/components/Star";
 import Tooltip from "~/components/Tooltip";
 import { publishDocument } from "~/actions/definitions/documents";
-import { navigateToTemplateSettings } from "~/actions/definitions/navigation";
 import { restoreRevision } from "~/actions/definitions/revisions";
 import useCurrentTeam from "~/hooks/useCurrentTeam";
 import useCurrentUser from "~/hooks/useCurrentUser";
@@ -38,7 +38,10 @@ import { documentEditPath } from "~/utils/routeHelpers";
 import ObservingBanner from "./ObservingBanner";
 import PublicBreadcrumb from "./PublicBreadcrumb";
 import ShareButton from "./ShareButton";
-import { AppearanceAction } from "~/components/Sharing/components/Actions";
+import {
+  AppearanceAction,
+  SubscribeAction,
+} from "~/components/Sharing/components/Actions";
 import useShare from "@shared/hooks/useShare";
 import { type Editor } from "~/editor";
 import { ChangesNavigation } from "./ChangesNavigation";
@@ -53,7 +56,7 @@ type Props = {
   isPublishing: boolean;
   publishingIsDisabled: boolean;
   savingIsDisabled: boolean;
-  onSelectTemplate: (template: Document) => void;
+  onSelectTemplate: (template: Template) => void;
   onSave: (options: {
     done?: boolean;
     publish?: boolean;
@@ -67,8 +70,6 @@ function DocumentHeader({
   revision,
   isEditing,
   isDraft,
-  isPublishing,
-  isSaving,
   savingIsDisabled,
   publishingIsDisabled,
   onSelectTemplate,
@@ -82,10 +83,19 @@ function DocumentHeader({
   const isMobileMedia = useMobile();
   const isRevision = !!revision;
   const isEditingFocus = useEditingFocus();
+
+  // Set CSS variable for header offset (used by sticky table headers)
+  useEffect(() => {
+    window.document.documentElement.style.setProperty(
+      "--header-offset",
+      isEditingFocus ? "0px" : "64px"
+    );
+  }, [isEditingFocus]);
+
   const { hasHeadings, editor } = useDocumentContext();
   const sidebarContext = useLocationSidebarContext();
   const [measureRef, size] = useMeasure();
-  const { isShare, shareId, sharedTree } = useShare();
+  const { isShare, shareId, sharedTree, allowSubscriptions } = useShare();
   const isMobile = isMobileMedia || size.width < 700;
 
   // We cache this value for as long as the component is mounted so that if you
@@ -109,12 +119,10 @@ function DocumentHeader({
   }, [ui, isShare]);
 
   const can = usePolicy(document);
-  const { isDeleted, isTemplate } = document;
-  const isTemplateEditable = can.update && isTemplate;
+  const { isDeleted } = document;
   const canToggleEmbeds = team?.documentEmbeds;
   const showContents =
-    (ui.tocVisible === true && !document.isTemplate) ||
-    (isShare && ui.tocVisible !== false);
+    ui.tocVisible === true || (isShare && ui.tocVisible !== false);
 
   const toc = (
     <Tooltip
@@ -153,6 +161,7 @@ function DocumentHeader({
             pathname: documentEditPath(document),
             state: { sidebarContext },
           }}
+          haptic="light"
           neutral
         >
           {isMobile ? null : t("Edit")}
@@ -204,6 +213,9 @@ function DocumentHeader({
         }
         actions={
           <>
+            {allowSubscriptions !== false && !user && (
+              <SubscribeAction shareId={shareId} documentId={document.id} />
+            )}
             <AppearanceAction />
             {can.update && !isEditing ? editAction : <div />}
           </>
@@ -222,12 +234,12 @@ function DocumentHeader({
           isMobile ? (
             <TableOfContentsMenu />
           ) : (
-            <DocumentBreadcrumb document={document}>
-              {document.isTemplate ? null : (
-                <>
-                  {toc} <Star document={document} color={theme.textSecondary} />
-                </>
-              )}
+            <DocumentBreadcrumb document={document as Document}>
+              {toc}{" "}
+              <Star
+                document={document as Document}
+                color={theme.textSecondary}
+              />
             </DocumentBreadcrumb>
           )
         }
@@ -247,45 +259,38 @@ function DocumentHeader({
         actions={({ isCompact }) => (
           <>
             <ObservingBanner />
-
-            {!isPublishing && isSaving && user?.separateEditMode && (
-              <Status>{t("Saving")}…</Status>
-            )}
             {!isDeleted && !isRevision && can.listViews && (
               <Collaborators
                 document={document}
                 limit={isCompact ? 3 : undefined}
               />
             )}
-            {(isEditing || !user?.separateEditMode) &&
-              !isTemplate &&
-              isNew &&
-              can.update && (
-                <Action>
-                  <TemplatesMenu
-                    isCompact={isCompact}
-                    document={document}
-                    onSelectTemplate={onSelectTemplate}
-                  />
-                </Action>
-              )}
-            {!isEditing && !isRevision && !isTemplate && can.update && (
+            {(isEditing || !user?.separateEditMode) && isNew && can.update && (
+              <Action>
+                <TemplatesMenu
+                  isCompact={isCompact}
+                  document={document as Document}
+                  onSelectTemplate={onSelectTemplate}
+                />
+              </Action>
+            )}
+            {!isEditing && !isRevision && can.update && (
               <Action>
                 <ShareButton document={document} />
               </Action>
             )}
-            {(isEditing || isTemplateEditable) && (
+            {isEditing && (
               <Action>
                 <Tooltip
-                  content={t("Save")}
+                  content={isDraft ? t("Save draft") : t("Done editing")}
                   shortcut={`${metaDisplay}+enter`}
                   placement="bottom"
                 >
                   <Button
-                    action={isTemplate ? navigateToTemplateSettings : undefined}
-                    onClick={isTemplate ? undefined : handleSave}
+                    onClick={handleSave}
                     disabled={savingIsDisabled}
                     neutral={isDraft}
+                    haptic="medium"
                     hideIcon
                   >
                     {isDraft ? t("Save draft") : t("Done editing")}
@@ -337,9 +342,7 @@ function DocumentHeader({
                   hideOnActionDisabled
                   hideIcon
                 >
-                  {document.collectionId || document.isWorkspaceTemplate
-                    ? t("Publish")
-                    : `${t("Publish")}…`}
+                  {t("Publish")}…
                 </Button>
               </Action>
             )}
@@ -365,12 +368,6 @@ function DocumentHeader({
 const StyledHeader = styled(Header)<{ $hidden: boolean }>`
   transition: opacity 500ms ease-in-out;
   ${(props) => props.$hidden && "opacity: 0;"}
-`;
-
-const Status = styled(Action)`
-  padding-left: 0;
-  padding-right: 4px;
-  color: ${(props) => props.theme.slate};
 `;
 
 export default observer(DocumentHeader);

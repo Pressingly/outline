@@ -1,17 +1,22 @@
 import { observer } from "mobx-react";
-import { ArchiveIcon, GoToIcon, ShapesIcon, TrashIcon } from "outline-icons";
+import { ArchiveIcon, GoToIcon, TrashIcon } from "outline-icons";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 import styled from "styled-components";
 import Icon from "@shared/components/Icon";
 import type { NavigationNode } from "@shared/types";
+import type Collection from "~/models/Collection";
 import type Document from "~/models/Document";
 import Breadcrumb from "~/components/Breadcrumb";
 import CollectionIcon from "~/components/Icons/CollectionIcon";
+import { ContextMenu } from "~/components/Menu/ContextMenu";
+import { ActionContextProvider } from "~/hooks/useActionContext";
+import { useCollectionMenuAction } from "~/hooks/useCollectionMenuAction";
+import { useDocumentMenuAction } from "~/hooks/useDocumentMenuAction";
 import { useLocationSidebarContext } from "~/hooks/useLocationSidebarContext";
 import usePolicy from "~/hooks/usePolicy";
 import useStores from "~/hooks/useStores";
-import { archivePath, settingsPath, trashPath } from "~/utils/routeHelpers";
+import { archivePath, trashPath } from "~/utils/routeHelpers";
 import { createInternalLinkAction } from "~/actions";
 import { ActiveDocumentSection } from "~/actions/sections";
 
@@ -68,14 +73,9 @@ function DocumentBreadcrumb(
         to: archivePath(),
       }),
       createInternalLinkAction({
-        name: t("Templates"),
-        section: ActiveDocumentSection,
-        icon: <ShapesIcon />,
-        visible: document.template,
-        to: settingsPath("templates"),
-      }),
-      createInternalLinkAction({
-        name: collection?.name,
+        name: collection ? (
+          <CollectionName collection={collection} />
+        ) : undefined,
         section: ActiveDocumentSection,
         icon: collection ? (
           <CollectionIcon collection={collection} expanded />
@@ -97,17 +97,14 @@ function DocumentBreadcrumb(
       ...path.map((node) => {
         const title = node.title || t("Untitled");
         return createInternalLinkAction({
-          name: node.icon ? (
-            <>
-              <StyledIcon
-                value={node.icon}
-                color={node.color}
-                initial={node.title.charAt(0).toUpperCase()}
-              />{" "}
-              {title}
-            </>
-          ) : (
-            title
+          name: (
+            <DocumentName
+              documentId={node.id}
+              collection={collection}
+              icon={node.icon}
+              color={node.color}
+              title={title}
+            />
           ),
           section: ActiveDocumentSection,
           to: {
@@ -175,6 +172,75 @@ function DocumentBreadcrumb(
     </Breadcrumb>
   );
 }
+
+/** Renders a collection name wrapped in a context menu. */
+const CollectionName = observer(function CollectionName_({
+  collection,
+}: {
+  collection: Collection;
+}) {
+  const { t } = useTranslation();
+  const menuAction = useCollectionMenuAction({
+    collectionId: collection.id,
+  });
+
+  return (
+    <ActionContextProvider value={{ activeModels: [collection] }}>
+      <ContextMenu action={menuAction} ariaLabel={t("Collection options")}>
+        <span>{collection.name}</span>
+      </ContextMenu>
+    </ActionContextProvider>
+  );
+});
+
+/** Renders a document name wrapped in a context menu. */
+const DocumentName = observer(function DocumentName_({
+  documentId,
+  collection,
+  icon,
+  color,
+  title,
+}: {
+  documentId: string;
+  collection: Collection | undefined;
+  icon: string | undefined;
+  color: string | undefined;
+  title: string;
+}) {
+  const { t } = useTranslation();
+  const { documents } = useStores();
+  const doc = documents.get(documentId);
+  const menuAction = useDocumentMenuAction({ documentId });
+
+  const content = icon ? (
+    <>
+      <StyledIcon
+        value={icon}
+        color={color}
+        initial={title.charAt(0).toUpperCase()}
+      />{" "}
+      {title}
+    </>
+  ) : (
+    title
+  );
+
+  if (!doc) {
+    return <>{content}</>;
+  }
+
+  return (
+    <ActionContextProvider
+      value={{
+        activeModels: [doc, ...(collection ? [collection] : [])],
+      }}
+    >
+      <ContextMenu action={menuAction} ariaLabel={t("Document options")}>
+        <span>{content}</span>
+      </ContextMenu>
+    </ActionContextProvider>
+  );
+});
 
 const StyledIcon = styled(Icon)`
   margin-right: 2px;

@@ -16,15 +16,15 @@ import Scrollable from "~/components/Scrollable";
 import useCurrentTeam from "~/hooks/useCurrentTeam";
 import useMaxHeight from "~/hooks/useMaxHeight";
 import usePolicy from "~/hooks/usePolicy";
-import useRequest from "~/hooks/useRequest";
 import useStores from "~/hooks/useStores";
 import type { Permission } from "~/types";
 import { EmptySelectValue } from "~/types";
-import { Separator } from "../components";
+import { Separator, GroupMembersPopover } from "../components";
 import { ListItem } from "../components/ListItem";
 import { Placeholder } from "../components/Placeholder";
 import { PublicAccess } from "./PublicAccess";
 import Flex from "@shared/components/Flex";
+import ButtonLink from "~/components/ButtonLink";
 
 type Props = {
   /** Collection to which team members are supposed to be invited */
@@ -37,10 +37,12 @@ type Props = {
   invitedInSession: string[];
   /** Whether the popover is visible. */
   visible: boolean;
+  /** Whether the share data is currently loading. */
+  loading: boolean;
 };
 
 export const AccessControlList = observer(
-  ({ collection, share, invitedInSession, visible }: Props) => {
+  ({ collection, share, invitedInSession, visible, loading }: Props) => {
     const { memberships, groupMemberships } = useStores();
     const team = useCurrentTeam();
     const can = usePolicy(collection);
@@ -48,35 +50,13 @@ export const AccessControlList = observer(
     const theme = useTheme();
     const collectionId = collection.id;
 
-    const { request: fetchMemberships, loading: membershipLoading } =
-      useRequest(
-        React.useCallback(
-          () => memberships.fetchAll({ id: collectionId }),
-          [memberships, collectionId]
-        )
-      );
-
-    const { request: fetchGroupMemberships, loading: groupMembershipLoading } =
-      useRequest(
-        React.useCallback(
-          () => groupMemberships.fetchAll({ collectionId }),
-          [groupMemberships, collectionId]
-        )
-      );
-
     const groupMembershipsInCollection =
       groupMemberships.inCollection(collectionId);
     const membershipsInCollection = memberships.inCollection(collectionId);
     const hasMemberships =
       groupMembershipsInCollection.length > 0 ||
       membershipsInCollection.length > 0;
-    const showLoading =
-      !hasMemberships && (membershipLoading || groupMembershipLoading);
-
-    React.useEffect(() => {
-      void fetchMemberships();
-      void fetchGroupMemberships();
-    }, [fetchMemberships, fetchGroupMemberships]);
+    const showLoading = !hasMemberships && loading;
 
     const containerRef = React.useRef<HTMLDivElement | null>(null);
     const publicAccessRef = React.useRef<HTMLDivElement | null>(null);
@@ -174,9 +154,15 @@ export const AccessControlList = observer(
                         />
                       }
                       title={membership.group.name}
-                      subtitle={t("{{ count }} member", {
-                        count: membership.group.memberCount,
-                      })}
+                      subtitle={
+                        <GroupMembersPopover group={membership.group}>
+                          <StyledButtonLink>
+                            {t("{{ count }} member", {
+                              count: membership.group.memberCount,
+                            })}
+                          </StyledButtonLink>
+                        </GroupMembersPopover>
+                      }
                       actions={
                         <div style={{ marginRight: -8 }}>
                           <InputMemberPermissionSelect
@@ -284,6 +270,13 @@ export const AccessControlList = observer(
     );
   }
 );
+
+const StyledButtonLink = styled(ButtonLink)`
+  color: ${s("textTertiary")};
+  &:hover {
+    text-decoration: underline;
+  }
+`;
 
 const Wrapper = styled(Flex)`
   flex-direction: column;

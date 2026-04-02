@@ -1,4 +1,4 @@
-import path from "path";
+import path from "node:path";
 import Router from "koa-router";
 import contentDisposition from "content-disposition";
 import JSZip from "jszip";
@@ -67,11 +67,9 @@ router.post(
   "revisions.update",
   auth(),
   validate(T.RevisionsUpdateSchema),
-  transaction(),
   async (ctx: APIContext<T.RevisionsUpdateReq>) => {
     const { id, name } = ctx.input.body;
     const { user } = ctx.state.auth;
-    const { transaction } = ctx.state;
 
     const revision = await Revision.findByPk(id, {
       rejectOnEmpty: true,
@@ -83,7 +81,7 @@ router.post(
     authorize(user, "update", revision);
 
     revision.name = name;
-    await revision.save({ transaction });
+    await revision.save();
 
     ctx.body = {
       data: await presentRevision(revision),
@@ -104,6 +102,7 @@ router.post(
 
     const revision = await Revision.findByPk(id, {
       rejectOnEmpty: true,
+      transaction,
       lock: {
         of: Revision,
         level: transaction.LOCK.UPDATE,

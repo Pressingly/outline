@@ -5,6 +5,7 @@ import styled from "styled-components";
 import { usePortalContext } from "~/components/Portal";
 import {
   MenuButton,
+  MenuDisclosure,
   MenuIconWrapper,
   MenuLabel,
 } from "~/components/primitives/components/Menu";
@@ -26,6 +27,8 @@ export type Props = {
   subtitle?: React.ReactNode;
   /** A string representing the keyboard shortcut for the item */
   shortcut?: string;
+  /** Whether to show a disclosure arrow indicating a submenu */
+  disclosure?: boolean;
 };
 
 function SuggestionsMenuItem({
@@ -37,6 +40,7 @@ function SuggestionsMenuItem({
   subtitle,
   shortcut,
   icon,
+  disclosure,
 }: Props) {
   const portal = usePortalContext();
   const ref = React.useCallback(
@@ -68,10 +72,14 @@ function SuggestionsMenuItem({
       <MenuLabel>
         {title}
         {subtitle && (
-          <Subtitle $active={selected}>&middot; {subtitle}</Subtitle>
+          <>
+            <Subtitle $active={selected}>&middot;</Subtitle>
+            <Subtitle $active={selected}>{subtitle}</Subtitle>
+          </>
         )}
         {shortcut && <Shortcut $active={selected}>{shortcut}</Shortcut>}
       </MenuLabel>
+      {disclosure && <MenuDisclosure />}
     </MenuButton>
   );
 }

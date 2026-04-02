@@ -121,10 +121,7 @@ export default async function userProvisioner(
 
   // A `user` record may exist even if there is no existing authentication record.
   // This is either an invite or a user that's external to the team
-  const existingUser = await User.scope([
-    "withAuthentications",
-    "withTeam",
-  ]).findOne({
+  const existingUser = await User.scope(["withTeam"]).findOne({
     where: {
       // Email from auth providers may be capitalized
       email: {
@@ -176,11 +173,19 @@ export default async function userProvisioner(
       );
     });
 
+    if (avatarUrl && !existingUser.getFlag(UserFlag.AvatarUpdated)) {
+      await new UploadUserAvatarTask().schedule({
+        userId: existingUser.id,
+        avatarUrl,
+      });
+    }
+
     if (isInvite) {
       const inviter = await existingUser.$get("invitedBy");
       if (inviter) {
         await new InviteAcceptedEmail({
           to: inviter.email,
+          language: inviter.language,
           inviterId: inviter.id,
           invitedName: existingUser.name,
           teamUrl: existingUser.team.url,

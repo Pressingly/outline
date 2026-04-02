@@ -10,7 +10,9 @@ import {
   PopoverContent,
 } from "~/components/primitives/Popover";
 import useMobile from "~/hooks/useMobile";
+import useShareDataLoader from "~/hooks/useShareDataLoader";
 import useStores from "~/hooks/useStores";
+import { preventDefault } from "~/utils/events";
 import lazyWithRetry from "~/utils/lazyWithRetry";
 
 const SharePopover = lazyWithRetry(
@@ -30,14 +32,23 @@ function ShareButton({ document }: Props) {
   const share = shares.getByDocumentId(document.id);
   const sharedParent = shares.getByDocumentParents(document);
   const domain = share?.domain || sharedParent?.domain;
+  const { preload, loading, reset } = useShareDataLoader({ document });
+
+  const handleOpenChange = useCallback(
+    (isOpen: boolean) => {
+      setOpen(isOpen);
+      if (isOpen) {
+        preload();
+      } else {
+        reset();
+      }
+    },
+    [preload, reset]
+  );
 
   const closePopover = useCallback(() => {
-    setOpen(false);
-  }, []);
-
-  const handleMouseEnter = useCallback(() => {
-    void document.share();
-  }, [document]);
+    handleOpenChange(false);
+  }, [handleOpenChange]);
 
   if (isMobile) {
     return null;
@@ -46,9 +57,9 @@ function ShareButton({ document }: Props) {
   const icon = document.isPubliclyShared ? <GlobeIcon /> : undefined;
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger>
-        <Button icon={icon} neutral onMouseEnter={handleMouseEnter}>
+        <Button icon={icon} neutral onMouseEnter={preload}>
           {t("Share")} {domain && <>&middot; {domain}</>}
         </Button>
       </PopoverTrigger>
@@ -58,12 +69,14 @@ function ShareButton({ document }: Props) {
         minHeight={175}
         side="bottom"
         align="end"
+        onEscapeKeyDown={preventDefault}
       >
         <Suspense fallback={null}>
           <SharePopover
             document={document}
             onRequestClose={closePopover}
             visible={open}
+            loading={loading}
           />
         </Suspense>
       </PopoverContent>

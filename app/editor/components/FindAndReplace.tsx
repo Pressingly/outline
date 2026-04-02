@@ -375,6 +375,10 @@ export default function FindAndReplace({
         minWidth={420}
         scrollable={false}
         onPointerDownOutside={() => setLocalOpen(false)}
+        onFocusOutside={(event) => {
+          event.preventDefault();
+          inputRef.current?.focus();
+        }}
         style={{ marginRight: 16, marginTop: 60 }}
       >
         <Content column>
@@ -439,7 +443,7 @@ export default function FindAndReplace({
           </Flex>
           <ResizingHeightContainer>
             {showReplace && !readOnly && (
-              <HStack>
+              <HStack align="flex-start">
                 <StyledInput
                   maxLength={255}
                   value={replaceTerm}

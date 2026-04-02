@@ -1,4 +1,4 @@
-import path from "path";
+import path from "node:path";
 import type { InferAttributes, InferCreationAttributes } from "sequelize";
 import sequelizeStrictAttributes from "sequelize-strict-attributes";
 import type { SequelizeOptions } from "sequelize-typescript";
@@ -6,9 +6,12 @@ import { Sequelize } from "sequelize-typescript";
 import type { MigrationError } from "umzug";
 import { Umzug, SequelizeStorage } from "umzug";
 import env from "@server/env";
+import { ClientClosedRequestError } from "@server/errors";
 import type Model from "@server/models/base/Model";
 import Logger from "../logging/Logger";
 import * as models from "../models";
+import { requestContext } from "./requestContext";
+import { getConnectionName } from "./utils";
 
 /**
  * Returns database configuration for Sequelize constructor.
@@ -64,6 +67,7 @@ export function createDatabaseInstance(
       typeValidation: true,
       logQueryParameters: env.isDevelopment,
       dialectOptions: {
+        application_name: getConnectionName(),
         ssl:
           env.isProduction && !isSSLDisabled
             ? {
@@ -104,6 +108,18 @@ export function createDatabaseInstance(
     if (env.isTest) {
       instance = monkeyPatchSequelizeErrorsForJest(instance);
     }
+
+    // Skip queries when the originating HTTP request socket has been destroyed
+    // (e.g. client disconnected or server timeout). This avoids wasting database
+    // resources on work whose response can never be delivered.
+    const assertConnectionOpen = () => {
+      const store = requestContext.getStore();
+      if (store?.req.socket.destroyed) {
+        throw ClientClosedRequestError();
+      }
+    };
+    instance.addHook("beforeFind", assertConnectionOpen);
+    instance.addHook("beforeCount", assertConnectionOpen);
 
     // Add hooks to warn about write operations on read-only connections
     if (isReadOnly) {
@@ -253,11 +269,11 @@ export const sequelize = createDatabaseInstance(databaseConfig, models);
 
 /**
  * Read-only database connection for read replicas.
- * Falls back to the main connection if DATABASE_URL_READ_ONLY is not set.
+ * Falls back to the main connection if DATABASE_READ_ONLY_URL is not set.
  */
-export const sequelizeReadOnly = env.DATABASE_URL_READ_ONLY
+export const sequelizeReadOnly = env.DATABASE_READ_ONLY_URL
   ? createDatabaseInstance(
-      env.DATABASE_URL_READ_ONLY,
+      env.DATABASE_READ_ONLY_URL,
       {},
       {
         readOnly: true,

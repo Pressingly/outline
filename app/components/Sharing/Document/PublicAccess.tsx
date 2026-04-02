@@ -70,6 +70,19 @@ function PublicAccess(
     [share]
   );
 
+  const handleSubscriptionsChanged = React.useCallback(
+    async (checked: boolean) => {
+      try {
+        await share?.save({
+          allowSubscriptions: checked,
+        });
+      } catch (err) {
+        toast.error(err.message);
+      }
+    },
+    [share]
+  );
+
   const handleShowLastModifiedChanged = React.useCallback(
     async (checked: boolean) => {
       try {
@@ -144,9 +157,10 @@ function PublicAccess(
     toast.success(t("Public link copied to clipboard"));
   }, [t]);
 
-  const shareUrl = sharedParent?.url
-    ? `${sharedParent.url}${document.url}`
-    : (share?.url ?? "");
+  const shareUrl =
+    sharedParent?.url && !document.isDraft
+      ? `${sharedParent.url}${document.url}`
+      : (share?.url ?? "");
 
   const copyButton = (
     <Tooltip content={t("Copy public link")} placement="top">
@@ -240,6 +254,31 @@ function PublicAccess(
             <ListItem
               title={
                 <Text type="tertiary" as={Flex}>
+                  {t("Email subscriptions")}&nbsp;
+                  <Tooltip
+                    content={t(
+                      "Allow viewers to subscribe and receive email notifications when this document is updated"
+                    )}
+                  >
+                    <NudeButton size={18}>
+                      <QuestionMarkIcon size={18} />
+                    </NudeButton>
+                  </Tooltip>
+                </Text>
+              }
+              actions={
+                <Switch
+                  aria-label={t("Email subscriptions")}
+                  checked={share?.allowSubscriptions ?? true}
+                  onChange={handleSubscriptionsChanged}
+                  width={26}
+                  height={14}
+                />
+              }
+            />
+            <ListItem
+              title={
+                <Text type="tertiary" as={Flex}>
                   {t("Show last modified")}&nbsp;
                   <Tooltip
                     content={t(
@@ -290,7 +329,7 @@ function PublicAccess(
           </>
         )}
 
-        {sharedParent?.published ? (
+        {sharedParent?.published && !document.isDraft ? (
           <ShareLinkInput type="text" disabled defaultValue={shareUrl}>
             {copyButton}
           </ShareLinkInput>

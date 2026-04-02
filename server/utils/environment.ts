@@ -1,5 +1,5 @@
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import dotenv from "@dotenvx/dotenvx";
 
 let environment: Record<string, string> = {};
@@ -35,5 +35,46 @@ process.env = {
   ...environment,
   ...process.env,
 };
+
+/**
+ * Process environment variables with _FILE suffix by reading the referenced
+ * file and setting the base variable. If the base variable is already set, the
+ * file is not read. File contents are trimmed of leading/trailing whitespace.
+ *
+ * @param env - the environment record to process.
+ */
+export function resolveFileSecrets(
+  env: Record<string, string | undefined>
+): void {
+  for (const key of Object.keys(env)) {
+    if (key.endsWith("_FILE")) {
+      const baseKey = key.slice(0, -5);
+      if (!baseKey.length) {
+        continue;
+      }
+
+      const filePath = env[key];
+
+      if (!filePath) {
+        continue;
+      }
+
+      if (env[baseKey] !== undefined) {
+        continue;
+      }
+
+      try {
+        env[baseKey] = fs.readFileSync(filePath, "utf8").trim();
+      } catch (err) {
+        // oxlint-disable-next-line no-console
+        console.error(
+          `Failed to read file for ${key} (${filePath}): ${(err as Error).message}`
+        );
+      }
+    }
+  }
+}
+
+resolveFileSecrets(process.env);
 
 export default process.env;

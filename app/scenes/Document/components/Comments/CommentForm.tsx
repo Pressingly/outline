@@ -103,6 +103,11 @@ function CommentForm({
 
   useOnClickOutside(formRef, reset);
 
+  React.useEffect(() => {
+    window.addEventListener("beforeunload", reset);
+    return () => window.removeEventListener("beforeunload", reset);
+  }, [reset]);
+
   const handleCreateComment = action(async (event: React.FormEvent) => {
     event.preventDefault();
 
@@ -254,11 +259,13 @@ function CommentForm({
   const handleMounted = React.useCallback(
     (ref) => {
       if (autoFocus && ref && !hasFocusedOnMount.current) {
-        ref.focusAtStart();
+        if (!draft) {
+          ref.focusAtStart();
+        }
         hasFocusedOnMount.current = true;
       }
     },
-    [autoFocus]
+    [autoFocus, draft]
   );
 
   const presence = animatePresence
@@ -312,25 +319,27 @@ function CommentForm({
           {highlightedText && (
             <HighlightedText>{highlightedText}</HighlightedText>
           )}
-          <CommentEditor
-            key={`${forceRender}`}
-            ref={mergeRefs([editorRef, handleMounted])}
-            defaultValue={draft}
-            onChange={handleChange}
-            onSave={handleSave}
-            onFocus={handleFocus}
-            onBlur={handleBlur}
-            onUpArrowAtStart={handleUpArrowAtStart}
-            maxLength={CommentValidation.maxLength}
-            placeholder={
-              placeholder ||
-              // isNew is only the case for comments that exist in draft state,
-              // they are marks in the document, but not yet saved to the db.
-              (thread?.isNew
-                ? `${t("Add a comment")}…`
-                : `${t("Add a reply")}…`)
-            }
-          />
+          <React.Suspense fallback={<div style={{ height: 24 }} />}>
+            <CommentEditor
+              key={`${forceRender}`}
+              ref={mergeRefs([editorRef, handleMounted])}
+              defaultValue={draft}
+              onChange={handleChange}
+              onSave={handleSave}
+              onFocus={handleFocus}
+              onBlur={handleBlur}
+              onUpArrowAtStart={handleUpArrowAtStart}
+              maxLength={CommentValidation.maxLength}
+              placeholder={
+                placeholder ||
+                // isNew is only the case for comments that exist in draft state,
+                // they are marks in the document, but not yet saved to the db.
+                (thread?.isNew
+                  ? `${t("Add a comment")}…`
+                  : `${t("Add a reply")}…`)
+              }
+            />
+          </React.Suspense>
           {(inputFocused || draft) && (
             <Flex justify="space-between" reverse={dir === "rtl"} gap={8}>
               <HStack>

@@ -31,7 +31,7 @@ function SettingsSidebar() {
 
   const groupedConfig = groupBy(
     configs.filter((item) =>
-      item.group === "Integrations" && item.pluginId
+      item.group === t("Integrations") && item.pluginId
         ? integrations.findByService(item.pluginId)
         : true
     ),
@@ -76,7 +76,8 @@ function SettingsSidebar() {
                     to={item.path}
                     onClickIntent={item.preload}
                     active={
-                      item.path.startsWith(settingsPath("templates"))
+                      item.path.startsWith(settingsPath("templates")) ||
+                      item.path.startsWith(settingsPath("groups"))
                         ? location.pathname.startsWith(item.path)
                         : undefined
                     }

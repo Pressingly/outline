@@ -44,6 +44,7 @@ import type {
 export enum AuthenticationType {
   API = "api",
   APP = "app",
+  MCP = "mcp",
   OAUTH = "oauth",
 }
 
@@ -60,6 +61,8 @@ export type Authentication = {
   type?: AuthenticationType;
   /** The authentication service used to create this session (e.g., "email", "passkeys", "google"). */
   service?: string;
+  /** The OAuth scopes granted for this session, if applicable. */
+  scope?: string[];
 };
 
 export type Pagination = {
@@ -72,6 +75,7 @@ export type AppState = {
   auth: Authentication | Record<string, never>;
   transaction: Transaction;
   pagination: Pagination;
+  oauthClient?: OAuthClient;
 };
 
 export type AppContext = ParameterizedContext<AppState, DefaultContext>;
@@ -81,7 +85,7 @@ export type BaseReq = z.infer<typeof BaseSchema>;
 export type BaseRes = unknown;
 
 export interface APIContext<
-  ReqT = BaseReq,
+  ReqT = Partial<BaseReq>,
   ResT = BaseRes,
 > extends ParameterizedContext<
   AppState,
@@ -245,6 +249,16 @@ export type DocumentEvent = BaseEvent<Document> &
     | DocumentMovedEvent
     | DocumentAccessRequestEvent
   );
+
+export type TemplateEvent = BaseEvent<Document> & {
+  name:
+    | "templates.create"
+    | "templates.update"
+    | "templates.delete"
+    | "templates.restore";
+  modelId: string;
+  collectionId?: string;
+};
 
 export type EmptyTrashEvent = {
   name: "documents.empty_trash";
@@ -490,6 +504,7 @@ export type Event =
   | ShareEvent
   | SubscriptionEvent
   | TeamEvent
+  | TemplateEvent
   | UserEvent
   | UserMembershipEvent
   | ViewEvent
@@ -536,7 +551,6 @@ export type DocumentJSONExport = {
   updatedAt: string;
   publishedAt: string | null;
   fullWidth: boolean;
-  template: boolean;
   parentDocumentId: string | null;
 };
 
@@ -574,18 +588,22 @@ export type UnfurlIssueOrPR =
   | UnfurlResponse[UnfurlResourceType.Issue]
   | UnfurlResponse[UnfurlResourceType.PR];
 
+export type UnfurlProject = UnfurlResponse[UnfurlResourceType.Project];
+
 export type UnfurlURL = UnfurlResponse[UnfurlResourceType.URL] & {
   transformedUnfurl: true;
 };
 
 export type Unfurl =
   | UnfurlIssueOrPR
+  | UnfurlProject
   | UnfurlURL
   | {
       type: Exclude<
         UnfurlResourceType,
         | UnfurlResourceType.Issue
         | UnfurlResourceType.PR
+        | UnfurlResourceType.Project
         | UnfurlResourceType.URL
       >;
       [x: string]: JSONValue;

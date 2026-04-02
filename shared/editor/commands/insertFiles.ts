@@ -35,6 +35,12 @@ export type Options = {
     width?: number;
     /** Height to use when inserting image */
     height?: number;
+    /** Alt text / caption to use when inserting image */
+    alt?: string | null;
+    /** Layout class for alignment when inserting image */
+    layoutClass?: string | null;
+    /** Whether to show a PDF preview embed for attachment nodes */
+    preview?: boolean;
   };
 };
 
@@ -78,7 +84,6 @@ const insertFiles = async function (
         FileHelper.isVideo(file.type) &&
         !options.isAttachment &&
         !!schema.nodes.video;
-      const isPdf = FileHelper.isPdf(file.type) && !options.isAttachment;
       const getDimensions = isImage
         ? FileHelper.getImageDimensions
         : isVideo
@@ -91,7 +96,6 @@ const insertFiles = async function (
         source: await FileHelper.getImageSourceAttr(file),
         isImage,
         isVideo,
-        isPdf,
         file,
       };
     })
@@ -200,7 +204,7 @@ const insertFiles = async function (
                   title: upload.file.name ?? dictionary.untitled,
                   size: upload.file.size,
                   contentType: upload.file.type,
-                  preview: upload.isPdf,
+                  preview: false,
                   ...options.attrs,
                 })
               )

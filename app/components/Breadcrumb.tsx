@@ -1,4 +1,5 @@
 import { GoToIcon } from "outline-icons";
+import { observer } from "mobx-react";
 import * as React from "react";
 import { Link } from "react-router-dom";
 import styled from "styled-components";
@@ -54,6 +55,15 @@ function Breadcrumb(
     });
   }
 
+  const handleClick = React.useCallback(
+    (event: React.MouseEvent<HTMLAnchorElement>) => {
+      if (event.currentTarget.querySelector('[data-state="open"]')) {
+        event.preventDefault();
+      }
+    },
+    []
+  );
+
   const toBreadcrumb = React.useCallback(
     (action: TopLevelAction, index: number) => {
       if (action.type === "menu") {
@@ -67,6 +77,7 @@ function Breadcrumb(
           {item.icon}
           <Item
             to={item.to}
+            onClick={handleClick}
             $withIcon={!!item.icon}
             $highlight={!!highlightFirstItem && index === 0}
           >
@@ -75,7 +86,7 @@ function Breadcrumb(
         </>
       );
     },
-    [actionContext, highlightFirstItem]
+    [actionContext, handleClick, highlightFirstItem]
   );
 
   return (
@@ -121,4 +132,4 @@ const Item = styled(Link)<{ $highlight: boolean; $withIcon: boolean }>`
   }
 `;
 
-export default React.forwardRef<HTMLDivElement, Props>(Breadcrumb);
+export default observer(React.forwardRef<HTMLDivElement, Props>(Breadcrumb));
