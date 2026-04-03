@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  buildTeam,
-  buildCollection,
-  buildAttachment,
-} from "@server/test/factories";
+import { buildTeam, buildCollection, buildAttachment } from "@server/test/factories";
 
 describe("Team", () => {
   describe("collectionIds", () => {

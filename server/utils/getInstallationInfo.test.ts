@@ -19,7 +19,11 @@ describe("getVersionInfo", () => {
   it("should return version info when Docker Hub is accessible", async () => {
     fetchMock.mockResponseOnce(
       JSON.stringify({
-        results: [{ name: "0.81.0" }, { name: "0.80.0" }, { name: "0.79.0" }],
+        results: [
+          { name: "0.81.0" },
+          { name: "0.80.0" },
+          { name: "0.79.0" },
+        ],
         next: null,
       })
     );

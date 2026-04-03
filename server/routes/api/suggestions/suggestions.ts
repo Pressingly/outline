@@ -74,11 +74,7 @@ router.post(
         offset,
         limit,
       }),
-      SearchProviderManager.getProvider().searchCollectionsForUser(actor, {
-        query,
-        offset,
-        limit,
-      }),
+      SearchProviderManager.getProvider().searchCollectionsForUser(actor, { query, offset, limit }),
     ]);
 
     ctx.body = {

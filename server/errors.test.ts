@@ -16,10 +16,7 @@ describe("errors", () => {
   describe("User input errors", () => {
     const userInputErrors = [
       { name: "AuthenticationError", fn: errors.AuthenticationError },
-      {
-        name: "InvalidAuthenticationError",
-        fn: errors.InvalidAuthenticationError,
-      },
+      { name: "InvalidAuthenticationError", fn: errors.InvalidAuthenticationError },
       { name: "AuthorizationError", fn: errors.AuthorizationError },
       { name: "CSRFError", fn: errors.CSRFError },
       { name: "RateLimitExceededError", fn: errors.RateLimitExceededError },
@@ -36,24 +33,12 @@ describe("errors", () => {
       { name: "FileImportError", fn: errors.FileImportError },
       { name: "OAuthStateMismatchError", fn: errors.OAuthStateMismatchError },
       { name: "TeamPendingDeletionError", fn: errors.TeamPendingDeletionError },
-      {
-        name: "EmailAuthenticationRequiredError",
-        fn: errors.EmailAuthenticationRequiredError,
-      },
+      { name: "EmailAuthenticationRequiredError", fn: errors.EmailAuthenticationRequiredError },
       { name: "MicrosoftGraphError", fn: errors.MicrosoftGraphError },
       { name: "TeamDomainRequiredError", fn: errors.TeamDomainRequiredError },
-      {
-        name: "GmailAccountCreationError",
-        fn: errors.GmailAccountCreationError,
-      },
-      {
-        name: "OIDCMalformedUserInfoError",
-        fn: errors.OIDCMalformedUserInfoError,
-      },
-      {
-        name: "AuthenticationProviderDisabledError",
-        fn: errors.AuthenticationProviderDisabledError,
-      },
+      { name: "GmailAccountCreationError", fn: errors.GmailAccountCreationError },
+      { name: "OIDCMalformedUserInfoError", fn: errors.OIDCMalformedUserInfoError },
+      { name: "AuthenticationProviderDisabledError", fn: errors.AuthenticationProviderDisabledError },
       { name: "UnprocessableEntityError", fn: errors.UnprocessableEntityError },
       { name: "ClientClosedRequestError", fn: errors.ClientClosedRequestError },
     ];
@@ -68,9 +53,7 @@ describe("errors", () => {
 
   describe("UserSuspendedError", () => {
     it("should not be marked for Sentry reporting", () => {
-      const error = errors.UserSuspendedError({
-        adminEmail: "test@example.com",
-      });
+      const error = errors.UserSuspendedError({ adminEmail: "test@example.com" });
       expect(error.isReportable).toBe(false);
     });
   });

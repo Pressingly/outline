@@ -279,7 +279,9 @@ describe("isMailboxAddress", () => {
     });
 
     it("should accept a mailbox format with quoted display name containing a comma", () => {
-      expect(isMailboxAddress('"Company, Inc." <user@example.com>')).toBe(true);
+      expect(
+        isMailboxAddress('"Company, Inc." <user@example.com>')
+      ).toBe(true);
     });
 
     it("should accept a mailbox format with a quoted display name", () => {

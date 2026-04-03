@@ -12,7 +12,7 @@ import { useMenuAction } from "~/hooks/useMenuAction";
 
 /**
  * Hook that constructs the action menu for emoji management operations.
- *
+ * 
  * @param targetEmoji - the emoji to build actions for, or null to skip.
  * @returns action with children for use in menus, or undefined if emoji is null.
  */
@@ -28,10 +28,7 @@ export function useEmojiMenuActions(targetEmoji: Emoji | null) {
     dialogs.openModal({
       title: t("Delete Emoji"),
       content: (
-        <DeleteEmojiDialog
-          emoji={targetEmoji}
-          onSubmit={dialogs.closeAllModals}
-        />
+        <DeleteEmojiDialog emoji={targetEmoji} onSubmit={dialogs.closeAllModals} />
       ),
     });
   }, [t, targetEmoji, dialogs]);
