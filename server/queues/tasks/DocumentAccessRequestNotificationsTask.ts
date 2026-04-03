@@ -12,7 +12,7 @@ import {
   Collection,
   AccessRequest,
 } from "@server/models";
-import type { DocumentAccessRequestEvent } from "@server/types";
+import type { AccessRequestEvent } from "@server/types";
 import { BaseTask, TaskPriority } from "./base/BaseTask";
 import { uniq } from "lodash";
 
@@ -20,8 +20,8 @@ import { uniq } from "lodash";
  * Notification task that sends notifications to users who can manage a document
  * when someone requests access to it.
  */
-export default class DocumentAccessRequestNotificationsTask extends BaseTask<DocumentAccessRequestEvent> {
-  public async perform(event: DocumentAccessRequestEvent) {
+export default class DocumentAccessRequestNotificationsTask extends BaseTask<AccessRequestEvent> {
+  public async perform(event: AccessRequestEvent) {
     const document = await Document.findByPk(event.documentId);
     if (!document) {
       Logger.debug(

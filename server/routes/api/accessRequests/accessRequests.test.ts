@@ -1,5 +1,5 @@
 import { DocumentPermission } from "@shared/types";
-import { AccessRequest, Event, UserMembership } from "@server/models";
+import { AccessRequest, UserMembership } from "@server/models";
 import { AccessRequestStatus } from "@server/models/AccessRequest";
 import {
   buildAdmin,
@@ -44,10 +44,10 @@ describe("#accessRequests.create", () => {
     });
     const body = await res.json();
     expect(res.status).toEqual(404);
-    expect(body.message).toEqual("Document could not be found");
+    expect(body.message).toEqual("Resource not found");
   });
 
-  it("should create event when requesting access to a document", async () => {
+  it("should create access request for a document", async () => {
     const team = await buildTeam();
     const owner = await buildUser({ teamId: team.id });
     const requester = await buildUser({ teamId: team.id });
@@ -62,17 +62,11 @@ describe("#accessRequests.create", () => {
         documentId: document.id,
       },
     });
+    const body = await res.json();
 
     expect(res.status).toEqual(200);
-    const events = await Event.findAll({
-      where: {
-        teamId: team.id,
-        name: "documents.request_access",
-      },
-    });
-    expect(events.length).toEqual(1);
-    expect(events[0].documentId).toEqual(document.id);
-    expect(events[0].actorId).toEqual(requester.id);
+    expect(body.data.documentId).toEqual(document.id);
+    expect(body.data.userId).toEqual(requester.id);
   });
 
   it("should work with document urlId", async () => {

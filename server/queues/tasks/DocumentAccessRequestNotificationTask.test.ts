@@ -29,7 +29,8 @@ describe("DocumentAccessRequestNotificationsTask", () => {
       const loggerSpy = jest.spyOn(Logger, "debug");
 
       await task.perform({
-        name: "documents.request_access",
+        name: "access_requests.create",
+        modelId: "ar1",
         documentId: "doc1",
         teamId: "team1",
         actorId: "actor1",
@@ -71,7 +72,8 @@ describe("DocumentAccessRequestNotificationsTask", () => {
 
       const task = new DocumentAccessRequestNotificationsTask();
       await task.perform({
-        name: "documents.request_access",
+        name: "access_requests.create",
+        modelId: "ar1",
         documentId: document.id,
         teamId: team.id,
         actorId: actor.id,
@@ -129,7 +131,8 @@ describe("DocumentAccessRequestNotificationsTask", () => {
 
       const task = new DocumentAccessRequestNotificationsTask();
       await task.perform({
-        name: "documents.request_access",
+        name: "access_requests.create",
+        modelId: "ar1",
         documentId: document.id,
         teamId: team.id,
         actorId: actor.id,
@@ -184,7 +187,8 @@ describe("DocumentAccessRequestNotificationsTask", () => {
 
       const task = new DocumentAccessRequestNotificationsTask();
       await task.perform({
-        name: "documents.request_access",
+        name: "access_requests.create",
+        modelId: "ar1",
         documentId: document.id,
         teamId: team.id,
         actorId: actor.id,
@@ -226,7 +230,8 @@ describe("DocumentAccessRequestNotificationsTask", () => {
 
       const task = new DocumentAccessRequestNotificationsTask();
       await task.perform({
-        name: "documents.request_access",
+        name: "access_requests.create",
+        modelId: "ar1",
         documentId: document.id,
         teamId: team.id,
         actorId: actor.id,

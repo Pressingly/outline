@@ -480,7 +480,7 @@ export enum NotificationEventType {
   Onboarding = "emails.onboarding",
   Features = "emails.features",
   ExportCompleted = "emails.export_completed",
-  RequestDocumentAccess = "documents.request_access",
+  RequestDocumentAccess = "access_requests.create",
 }
 
 export enum NotificationChannelType {

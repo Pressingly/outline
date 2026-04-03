@@ -3,7 +3,7 @@ import auth from "@server/middlewares/authentication";
 import { rateLimiter } from "@server/middlewares/rateLimiter";
 import { transaction } from "@server/middlewares/transaction";
 import validate from "@server/middlewares/validate";
-import { Document, AccessRequest, UserMembership, Event } from "@server/models";
+import { Document, AccessRequest, UserMembership } from "@server/models";
 import { AccessRequestStatus } from "@server/models/AccessRequest";
 import { authorize } from "@server/policies";
 import { presentAccessRequest, presentPolicies } from "@server/presenters";
@@ -45,11 +45,6 @@ router.post(
       teamId: document.teamId,
       userId: user.id,
       status: AccessRequestStatus.Pending,
-    });
-
-    await Event.createFromContext(ctx, {
-      name: "documents.request_access",
-      documentId: document.id,
     });
 
     ctx.body = {
