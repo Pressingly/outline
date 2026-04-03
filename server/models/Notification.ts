@@ -91,6 +91,10 @@ let baseDomain;
       association: "actor",
       required: false,
     },
+    {
+      association: "accessRequest",
+      required: false,
+    },
   ],
 }))
 @Table({

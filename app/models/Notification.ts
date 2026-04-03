@@ -84,6 +84,13 @@ class Notification extends Model {
   accessRequestId?: string;
 
   /**
+   * Status of the associated access request.
+   */
+  @Field
+  @observable
+  accessRequestStatus?: string;
+
+  /**
    * The user that triggered the notification.
    */
   @Relation(() => User)

@@ -11,6 +11,7 @@ export default async function presentNotification(
     id: notification.id,
     viewedAt: notification.viewedAt,
     accessRequestId: notification.accessRequestId,
+    accessRequestStatus: notification.accessRequest?.status,
     archivedAt: notification.archivedAt,
     createdAt: notification.createdAt,
     event: notification.event,

@@ -71,10 +71,13 @@ module.exports = {
       },
     });
 
-    await queryInterface.addIndex("access_requests", ["documentId"]);
+    await queryInterface.addIndex("access_requests", ["documentId", "userId"], {
+      unique: true,
+      where: { status: "pending" },
+      name: "access_requests_document_id_user_id_pending",
+    });
     await queryInterface.addIndex("access_requests", ["userId"]);
     await queryInterface.addIndex("access_requests", ["teamId"]);
-    await queryInterface.addIndex("access_requests", ["status"]);
   },
 
   async down(queryInterface) {

@@ -46,8 +46,9 @@ function NotificationListItem({ notification, onNavigate }: Props) {
   const [selectedPermission, setSelectedPermission] =
     React.useState<DocumentPermission>(DocumentPermission.Read);
 
-  const isAccessRequest =
-    notification.event === NotificationEventType.RequestDocumentAccess;
+  const isAccessRequestPending =
+    notification.event === NotificationEventType.RequestDocumentAccess &&
+    notification.accessRequestStatus === "pending";
 
   const permissions: Permission[] = React.useMemo(
     () => [
@@ -109,6 +110,7 @@ function NotificationListItem({ notification, onNavigate }: Props) {
           id: notification.accessRequestId,
           permission: selectedPermission,
         });
+        notification.accessRequestStatus = "approved";
         toast.success(
           t(`Permissions for {{ userName }} updated`, {
             userName: notification.actor?.name,
@@ -138,6 +140,7 @@ function NotificationListItem({ notification, onNavigate }: Props) {
         await client.post("/accessRequests.dismiss", {
           id: notification.accessRequestId,
         });
+        notification.accessRequestStatus = "dismissed";
         toast.success(t("Access request dismissed"));
         void notification.markAsRead();
       } catch {
@@ -171,7 +174,7 @@ function NotificationListItem({ notification, onNavigate }: Props) {
                 defaultValue={toJS(notification.comment.data)}
               />
             )}
-            {isAccessRequest && !notification.viewedAt && (
+            {isAccessRequestPending && (
               <ActionButtons gap={8} align="center">
                 <PermissionSelect>
                   <InputMemberPermissionSelect

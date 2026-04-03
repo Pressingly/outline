@@ -23,15 +23,18 @@ const Error403 = ({ documentId }: Props) => {
   const [requested, setRequested] = React.useState(false);
 
   React.useEffect(() => {
-    const checkRequested = async () => {
-      const request = await client.post("/accessRequests.info", {
-        documentId,
-      });
+    if (!documentId) {
+      return;
+    }
 
-      if (request?.data?.status === "pending") {
-        setRequested(true);
-      } else {
-        setRequested(false);
+    const checkRequested = async () => {
+      try {
+        const request = await client.post("/accessRequests.info", {
+          documentId,
+        });
+        setRequested(request?.data?.status === "pending");
+      } catch {
+        // No pending request or error — leave as not requested
       }
     };
 

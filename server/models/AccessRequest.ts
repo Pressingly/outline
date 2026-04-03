@@ -1,4 +1,8 @@
-import type { InferAttributes, InferCreationAttributes } from "sequelize";
+import type {
+  InferAttributes,
+  InferCreationAttributes,
+  SaveOptions,
+} from "sequelize";
 import {
   Table,
   ForeignKey,
@@ -85,16 +89,48 @@ class AccessRequest extends IdModel<
   responderId: string | null;
 
   @BeforeCreate
-  static async validateNoDuplicatePendingRequest(instance: AccessRequest) {
+  static async validateNoDuplicatePendingRequest(
+    instance: AccessRequest,
+    options: SaveOptions<AccessRequest>
+  ) {
     const { documentId, userId } = instance;
 
-    const existingRequest = await this.pendingRequest({ documentId, userId });
+    const existingRequest = await this.findOne({
+      where: {
+        documentId,
+        userId,
+        status: AccessRequestStatus.Pending,
+      },
+      transaction: options.transaction,
+    });
 
     if (existingRequest) {
       throw ValidationError(
         "A pending access request already exists for this document and user."
       );
     }
+  }
+
+  /**
+   * Approve this access request, setting the status and responder.
+   *
+   * @param responderId the id of the user approving the request.
+   */
+  public approve(responderId: string) {
+    this.status = AccessRequestStatus.Approved;
+    this.responderId = responderId;
+    this.respondedAt = new Date();
+  }
+
+  /**
+   * Dismiss this access request, setting the status and responder.
+   *
+   * @param responderId the id of the user dismissing the request.
+   */
+  public dismiss(responderId: string) {
+    this.status = AccessRequestStatus.Dismissed;
+    this.responderId = responderId;
+    this.respondedAt = new Date();
   }
 
   /**
@@ -116,19 +152,13 @@ class AccessRequest extends IdModel<
       return null;
     }
 
-    const document = await Document.findByPk(documentId);
-    if (!document) {
-      return null;
-    }
-
-    const req = await this.findOne({
+    return this.findOne({
       where: {
-        documentId: document.id,
+        documentId,
         userId,
         status: AccessRequestStatus.Pending,
       },
     });
-    return req;
   }
 }
 

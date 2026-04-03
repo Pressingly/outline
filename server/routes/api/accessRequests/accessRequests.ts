@@ -33,10 +33,12 @@ router.post(
     const { user } = ctx.state.auth;
     const { transaction } = ctx.state;
 
-    const document = await Document.findByPk(documentId, { transaction });
-    if (!document) {
-      throw NotFoundError("Document could not be found");
-    }
+    const document = await Document.findByPk(documentId, {
+      userId: user.id,
+      transaction,
+      rejectOnEmpty: true,
+    });
+    authorize(user, "read", document);
 
     const accessRequest = await AccessRequest.createWithCtx(ctx, {
       documentId: document.id,
@@ -61,14 +63,26 @@ router.post(
   "accessRequests.info",
   rateLimiter(RateLimiterStrategy.TwentyFivePerMinute),
   auth(),
-  validate(T.AccessRequestInfoSchema),
-  async (ctx: APIContext<T.AccessRequestInfoReq>) => {
+  validate(T.AccessRequestsInfoSchema),
+  async (ctx: APIContext<T.AccessRequestsInfoReq>) => {
     const { user } = ctx.state.auth;
     const { id, documentId } = ctx.input.body;
 
-    const accessReq = id
-      ? await AccessRequest.findByPk(id)
-      : await AccessRequest.pendingRequest({ documentId, userId: user.id });
+    let accessReq: AccessRequest | null;
+
+    if (id) {
+      accessReq = await AccessRequest.findByPk(id);
+    } else {
+      const document = await Document.findByPk(documentId!, {
+        userId: user.id,
+      });
+      accessReq = document
+        ? await AccessRequest.pendingRequest({
+            documentId: document.id,
+            userId: user.id,
+          })
+        : null;
+    }
 
     if (!accessReq) {
       throw NotFoundError("Access request not found");
@@ -96,8 +110,10 @@ router.post(
     const accessRequest = await AccessRequest.unscoped().findByPk(id, {
       rejectOnEmpty: true,
       transaction,
-      lock: transaction.LOCK.UPDATE,
+      lock: { level: transaction.LOCK.UPDATE, of: AccessRequest },
     });
+    authorize(user, "update", accessRequest);
+
     if (accessRequest.status !== AccessRequestStatus.Pending) {
       throw InvalidRequestError("Access request has already been responded to");
     }
@@ -126,7 +142,7 @@ router.post(
         documentId: accessRequest.documentId,
       },
       lock: transaction.LOCK.UPDATE,
-      ...ctx.context,
+      transaction,
     });
 
     if (membership) {
@@ -139,10 +155,8 @@ router.post(
       createdById: user.id,
     });
 
-    accessRequest.status = AccessRequestStatus.Approved;
-    accessRequest.responderId = user.id;
-    accessRequest.respondedAt = new Date();
-    await accessRequest.saveWithCtx(ctx, { transaction });
+    accessRequest.approve(user.id);
+    await accessRequest.saveWithCtx(ctx);
 
     ctx.body = {
       data: presentAccessRequest(accessRequest),
@@ -165,8 +179,10 @@ router.post(
     const accessRequest = await AccessRequest.unscoped().findByPk(id, {
       rejectOnEmpty: true,
       transaction,
-      lock: transaction.LOCK.UPDATE,
+      lock: { level: transaction.LOCK.UPDATE, of: AccessRequest },
     });
+    authorize(user, "update", accessRequest);
+
     if (accessRequest.status !== AccessRequestStatus.Pending) {
       throw InvalidRequestError("Access request has already been responded to");
     }
@@ -177,10 +193,8 @@ router.post(
     });
     authorize(user, "share", document);
 
-    accessRequest.status = AccessRequestStatus.Dismissed;
-    accessRequest.responderId = user.id;
-    accessRequest.respondedAt = new Date();
-    await accessRequest.saveWithCtx(ctx, { transaction });
+    accessRequest.dismiss(user.id);
+    await accessRequest.saveWithCtx(ctx);
 
     ctx.body = {
       data: presentAccessRequest(accessRequest),

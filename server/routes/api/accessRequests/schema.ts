@@ -17,7 +17,7 @@ export type AccessRequestsCreateReq = z.infer<
   typeof AccessRequestsCreateSchema
 >;
 
-export const AccessRequestInfoSchema = BaseSchema.extend({
+export const AccessRequestsInfoSchema = BaseSchema.extend({
   body: z
     .object({
       id: z.string().uuid().optional(),
@@ -29,7 +29,7 @@ export const AccessRequestInfoSchema = BaseSchema.extend({
     }),
 });
 
-export type AccessRequestInfoReq = z.infer<typeof AccessRequestInfoSchema>;
+export type AccessRequestsInfoReq = z.infer<typeof AccessRequestsInfoSchema>;
 
 export const AccessRequestsApproveSchema = BaseSchema.extend({
   body: BaseIdSchema.extend({
