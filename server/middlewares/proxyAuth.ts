@@ -19,16 +19,9 @@ const ACTIVE_THROTTLE_MS = 5 * 60 * 1000; // 5 minutes
  *
  * - If a valid `accessToken` cookie already exists the middleware is a no-op.
  * - On first visit the user and team are provisioned if they don't exist.
- * - Gated on the `PROXY_AUTH_ENABLED` env var (must be "true").
  */
 export default function proxyAuth() {
-  const enabled = process.env.PROXY_AUTH_ENABLED === "true";
-
   return async function proxyAuthMiddleware(ctx: AppContext, next: Next) {
-    if (!enabled) {
-      return next();
-    }
-
     // Skip bypass paths
     if (BYPASS_PATHS.some((p) => ctx.path.startsWith(p))) {
       return next();
