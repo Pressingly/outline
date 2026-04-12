@@ -1,12 +1,20 @@
 import type { Next } from "koa";
 import capitalize from "lodash/capitalize";
-import type { UserRole } from "@shared/types";
+import { Op } from "sequelize";
+import { UserRole } from "@shared/types";
+import { slugifyDomain } from "@shared/utils/domains";
+import { parseEmail } from "@shared/utils/email";
 import { UserRoleHelper } from "@shared/utils/UserRoleHelper";
 import tracer, {
   addTags,
   getRootSpanFromRequestContext,
 } from "@server/logging/tracer";
+import teamCreator from "@server/commands/teamCreator";
+import { createContext } from "@server/context";
+import env from "@server/env";
+import Logger from "@server/logging/Logger";
 import { User, Team, ApiKey, OAuthAuthentication } from "@server/models";
+import { sequelize } from "@server/storage/database";
 import type { AppContext } from "@server/types";
 import { AuthenticationType } from "@server/types";
 import { getUserForJWT } from "@server/utils/jwt";
@@ -82,6 +90,18 @@ export default function auth(options: AuthenticationOptions = {}) {
  * @returns An object containing the token and its transport method.
  */
 export function parseAuthentication(ctx: AppContext): AuthInput {
+  // When ForwardAuth is enabled, check for proxy-injected identity headers first.
+  // These are set by authenticating proxies such as oauth2-proxy or Authelia.
+  if (env.FORWARD_AUTH_ENABLED) {
+    const forwardAuthEmail = ctx.request.get("x-auth-request-email");
+    if (forwardAuthEmail) {
+      return {
+        token: `fwd:${forwardAuthEmail}`,
+        transport: "header",
+      };
+    }
+  }
+
   const authorizationHeader = ctx.request.get("authorization");
 
   if (authorizationHeader) {
@@ -241,6 +261,64 @@ async function validateAuthentication(
 
     scope = apiKey.scope ?? ["*"];
     await apiKey.updateActiveAt();
+  } else if (token.startsWith("fwd:") && env.FORWARD_AUTH_ENABLED) {
+    type = AuthenticationType.APP;
+    service = "forwardauth";
+
+    const email = token.slice(4).toLowerCase().trim();
+    const displayName =
+      ctx.request.get("x-auth-request-user") || email.split("@")[0];
+    const { domain } = parseEmail(email);
+
+    // Self-hosted deployments have a single team. When none exists yet the
+    // first arriving user bootstraps the installation.
+    let team = await Team.findOne();
+    let isNewTeam = false;
+
+    if (!team) {
+      Logger.info("authentication", "Provisioning new team via ForwardAuth", {
+        domain,
+      });
+      const subdomain = slugifyDomain(domain ?? "team");
+      team = await sequelize.transaction((transaction) =>
+        teamCreator(createContext({ ip: ctx.ip, transaction }), {
+          name: env.APP_NAME,
+          subdomain,
+          authenticationProviders: [
+            { name: "forwardauth", providerId: domain ?? "forwardauth" },
+          ],
+        })
+      );
+      isNewTeam = true;
+    }
+
+    // Find an existing user or provision a new one.
+    user = await User.scope("withTeam").findOne({
+      where: {
+        email: { [Op.iLike]: email },
+        teamId: team.id,
+      },
+    });
+
+    if (!user) {
+      Logger.info("authentication", "Provisioning new user via ForwardAuth", {
+        email,
+      });
+      const created = await User.create({
+        name: displayName,
+        email,
+        teamId: team.id,
+        // First user into a brand-new team becomes admin.
+        role: isNewTeam ? UserRole.Admin : team.defaultUserRole,
+        lastActiveAt: new Date(),
+        lastActiveIp: ctx.ip,
+      });
+      // Reload with associations so downstream middleware sees a full User.
+      user = await User.scope("withTeam").findByPk(created.id);
+      if (!user) {
+        throw AuthenticationError("Failed to provision ForwardAuth user");
+      }
+    }
   } else {
     type = AuthenticationType.APP;
     const result = await getUserForJWT(token);

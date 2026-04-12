@@ -1,6 +1,7 @@
 import type { DefaultState } from "koa";
 import { randomString } from "@shared/random";
 import { Scope } from "@shared/types";
+import env from "@server/env";
 import {
   buildUser,
   buildTeam,
@@ -8,6 +9,7 @@ import {
   buildApiKey,
   buildOAuthAuthentication,
 } from "@server/test/factories";
+import { User } from "@server/models";
 import { AuthenticationType } from "@server/types";
 import auth from "./authentication";
 
@@ -301,6 +303,139 @@ describe("Authentication middleware", () => {
       "Your access has been suspended by a workspace admin"
     );
     expect(error.errorData.adminEmail).toEqual(admin.email);
+  });
+
+  describe("with ForwardAuth headers", () => {
+    beforeEach(() => {
+      env.FORWARD_AUTH_ENABLED = true;
+    });
+
+    afterEach(() => {
+      env.FORWARD_AUTH_ENABLED = false;
+    });
+
+    it("should authenticate an existing user via X-Auth-Request-Email", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const state = {} as DefaultState;
+      const authMiddleware = auth();
+
+      await authMiddleware(
+        {
+          // @ts-expect-error mock request
+          request: {
+            get: jest.fn((header: string) => {
+              if (header === "x-auth-request-email") {
+                return user.email!;
+              }
+              return "";
+            }),
+          },
+          state,
+          ip: "127.0.0.1",
+          cache: {},
+        },
+        jest.fn()
+      );
+
+      expect(state.auth.user.id).toEqual(user.id);
+      expect(state.auth.service).toEqual("forwardauth");
+      expect(state.auth.type).toEqual(AuthenticationType.APP);
+    });
+
+    it("should provision a new user when X-Auth-Request-Email is unknown", async () => {
+      await buildTeam();
+      const state = {} as DefaultState;
+      const authMiddleware = auth();
+      const newEmail = `newuser-${randomString(6)}@example.com`;
+
+      await authMiddleware(
+        {
+          // @ts-expect-error mock request
+          request: {
+            get: jest.fn((header: string) => {
+              if (header === "x-auth-request-email") {
+                return newEmail;
+              }
+              if (header === "x-auth-request-user") {
+                return "New User";
+              }
+              return "";
+            }),
+          },
+          state,
+          ip: "127.0.0.1",
+          cache: {},
+        },
+        jest.fn()
+      );
+
+      const provisioned = await User.findOne({
+        where: { email: newEmail },
+      });
+      expect(provisioned).not.toBeNull();
+      expect(state.auth.user.email).toEqual(newEmail);
+      expect(state.auth.user.name).toEqual("New User");
+    });
+
+    it("should use email prefix as name when X-Auth-Request-User is absent", async () => {
+      await buildTeam();
+      const state = {} as DefaultState;
+      const authMiddleware = auth();
+      const newEmail = `prefix-${randomString(6)}@example.com`;
+
+      await authMiddleware(
+        {
+          // @ts-expect-error mock request
+          request: {
+            get: jest.fn((header: string) => {
+              if (header === "x-auth-request-email") {
+                return newEmail;
+              }
+              return "";
+            }),
+          },
+          state,
+          ip: "127.0.0.1",
+          cache: {},
+        },
+        jest.fn()
+      );
+
+      expect(state.auth.user.email).toEqual(newEmail);
+      expect(state.auth.user.name).toEqual(newEmail.split("@")[0]);
+    });
+
+    it("should not honour ForwardAuth headers when feature is disabled", async () => {
+      env.FORWARD_AUTH_ENABLED = false;
+      const state = {} as DefaultState;
+      const authMiddleware = auth();
+
+      try {
+        await authMiddleware(
+          {
+            // @ts-expect-error mock request
+            request: {
+              get: jest.fn((header: string) => {
+                if (header === "x-auth-request-email") {
+                  return "attacker@example.com";
+                }
+                return "";
+              }),
+              query: {},
+            },
+            // @ts-expect-error mock cookies
+            cookies: { get: jest.fn(() => undefined) },
+            state,
+            cache: {},
+          },
+          jest.fn()
+        );
+        expect(true).toBe(false); // should not reach here
+      } catch (e) {
+        expect(e.message).toEqual("Authentication required");
+      }
+    });
   });
 
   it("should return an error for deleted team", async () => {
