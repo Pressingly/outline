@@ -80,7 +80,9 @@ async function createSessionForEmail(
         },
         { transaction }
       );
-      Logger.info("proxyAuth: created default team", { teamId: team.id });
+      Logger.info("authentication", "proxyAuth: created default team", {
+        teamId: team.id,
+      });
     }
 
     // Find or create user
@@ -103,7 +105,7 @@ async function createSessionForEmail(
         },
         { transaction }
       );
-      Logger.info("proxyAuth: created user", {
+      Logger.info("authentication", "proxyAuth: created user", {
         userId: user.id,
         email,
         teamId: team.id,
@@ -149,7 +151,7 @@ async function createSessionForEmail(
       expires: new Date("2100"),
     });
 
-    Logger.info("proxyAuth: session created", {
+    Logger.info("authentication", "proxyAuth: session created", {
       userId: user.id,
       email,
       isNewUser,
