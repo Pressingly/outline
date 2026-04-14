@@ -15,7 +15,6 @@ import Logger from "@server/logging/Logger";
 import Metrics from "@server/logging/Metrics";
 import csp from "@server/middlewares/csp";
 import { attachCSRFToken } from "@server/middlewares/csrf";
-import proxyAuth from "@server/middlewares/proxyAuth";
 import ShutdownHelper, { ShutdownOrder } from "@server/utils/ShutdownHelper";
 import { initI18n } from "@server/utils/i18n";
 import routes from "../routes";
@@ -57,11 +56,6 @@ export default function init(app: Koa = new Koa(), server?: Server) {
   app.use<BaseContext, UserAgentContext>(userAgent);
 
   app.use(compress());
-
-  // Proxy auth middleware — creates Outline session from X-Auth-Request-Email
-  // header injected by Traefik ForwardAuth. Must run before API routes so the
-  // accessToken cookie is set before any authenticated API call.
-  app.use(proxyAuth());
 
   // Monitor server connections
   if (server) {
