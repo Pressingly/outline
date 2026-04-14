@@ -90,13 +90,13 @@ export default function auth(options: AuthenticationOptions = {}) {
  * @returns An object containing the token and its transport method.
  */
 export function parseAuthentication(ctx: AppContext): AuthInput {
-  // When ForwardAuth is enabled, check for proxy-injected identity headers first.
+  // When SSO auth type is configured, check for proxy-injected identity headers first.
   // These are set by authenticating proxies such as oauth2-proxy or Authelia.
-  if (env.FORWARD_AUTH_ENABLED) {
-    const forwardAuthEmail = ctx.request.get("x-auth-request-email");
-    if (forwardAuthEmail) {
+  if (env.AUTH_TYPE === "SSO") {
+    const authRequestEmail = ctx.request.get("x-auth-request-email");
+    if (authRequestEmail) {
       return {
-        token: `fwd:${forwardAuthEmail}`,
+        token: `fwd:${authRequestEmail}`,
         transport: "header",
       };
     }
@@ -261,13 +261,25 @@ async function validateAuthentication(
 
     scope = apiKey.scope ?? ["*"];
     await apiKey.updateActiveAt();
-  } else if (token.startsWith("fwd:") && env.FORWARD_AUTH_ENABLED) {
+  } else if (token.startsWith("fwd:") && env.AUTH_TYPE === "SSO") {
     type = AuthenticationType.APP;
     service = "forwardauth";
 
-    const email = token.slice(4).toLowerCase().trim();
+    const emailClaim = token.slice(4).toLowerCase().trim();
+    const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailClaim);
+    const email = isValidEmail
+      ? emailClaim
+      : (() => {
+          if (!env.SMB_NAME) {
+            throw AuthenticationError(
+              "SMB_NAME environment variable is not set, cannot construct email for ForwardAuth user"
+            );
+          }
+          return `${emailClaim.split("@")[0]}@${env.SMB_NAME}.com`;
+        })();
+    const localPart = emailClaim.split("@")[0];
     const displayName =
-      ctx.request.get("x-auth-request-user") || email.split("@")[0];
+      ctx.request.get("x-auth-request-user") || localPart;
     const { domain } = parseEmail(email);
 
     // Self-hosted deployments have a single team. When none exists yet the

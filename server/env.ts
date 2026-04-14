@@ -519,16 +519,22 @@ export class Environment {
     this.toOptionalNumber(environment.WORKER_CONCURRENCY_TASKS) ?? 10;
 
   /**
-   * When true, the server will trust X-Auth-Request-Email and X-Auth-Request-User
-   * headers injected by a reverse proxy (e.g. oauth2-proxy, Authelia) for
-   * authentication and automatic user provisioning. Only enable this when Outline
-   * is deployed behind a trusted authenticating proxy on a self-hosted instance.
+   * The authentication type to use. When set to "SSO", the server will trust
+   * X-Auth-Request-Email and X-Auth-Request-User headers injected by a reverse
+   * proxy (e.g. oauth2-proxy, Authelia) for authentication and automatic user
+   * provisioning. Only enable this when Outline is deployed behind a trusted
+   * authenticating proxy on a self-hosted instance.
    */
   @IsOptional()
-  @IsBoolean()
-  public FORWARD_AUTH_ENABLED = this.toBoolean(
-    environment.FORWARD_AUTH_ENABLED ?? "false"
-  );
+  @IsIn(["SSO"])
+  public AUTH_TYPE = this.toOptionalString(environment.AUTH_TYPE);
+
+  /**
+   * The SMB organisation name used to construct internal email addresses for
+   * users authenticated via ForwardAuth (e.g. "acme" → user@acme.com).
+   */
+  @IsNotEmpty()
+  public SMB_NAME = environment.SMB_NAME ?? "";
 
   /**
    * A boolean switch to toggle the rate limiter at application web server.
