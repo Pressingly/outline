@@ -375,10 +375,10 @@ describe("Authentication middleware", () => {
       );
 
       const provisioned = await User.findOne({
-        where: { email: newEmail },
+        where: { email: newEmail.toLowerCase() },
       });
       expect(provisioned).not.toBeNull();
-      expect(state.auth.user.email).toEqual(newEmail);
+      expect(state.auth.user.email).toEqual(newEmail.toLowerCase());
       expect(state.auth.user.name).toEqual("New User");
     });
 
