@@ -11,7 +11,7 @@ import {
 } from "@server/test/factories";
 import { User } from "@server/models";
 import { AuthenticationType } from "@server/types";
-import auth from "./authentication";
+import auth, { FORWARDAUTH_SERVICE } from "./authentication";
 
 describe("Authentication middleware", () => {
   describe("with session JWT", () => {
@@ -339,7 +339,7 @@ describe("Authentication middleware", () => {
       );
 
       expect(state.auth.user.id).toEqual(user.id);
-      expect(state.auth.service).toEqual("forwardauth");
+      expect(state.auth.service).toEqual(FORWARDAUTH_SERVICE);
       expect(state.auth.type).toEqual(AuthenticationType.APP);
     });
 

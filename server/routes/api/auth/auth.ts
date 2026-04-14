@@ -1,10 +1,12 @@
-import { subHours, subMinutes } from "date-fns";
+import { addMonths, subHours, subMinutes } from "date-fns";
 import Router from "koa-router";
 import uniqBy from "lodash/uniqBy";
 import { TeamPreference } from "@shared/types";
 import { parseDomain } from "@shared/utils/domains";
 import env from "@server/env";
-import auth from "@server/middlewares/authentication";
+import auth, {
+  FORWARDAUTH_SERVICE,
+} from "@server/middlewares/authentication";
 import { transaction } from "@server/middlewares/transaction";
 import { Event, Team } from "@server/models";
 import AuthenticationHelper from "@server/models/helpers/AuthenticationHelper";
@@ -119,6 +121,17 @@ const NON_SSO_SERVICES = ["email", "passkeys"];
 
 router.post("auth.info", auth(), async (ctx: APIContext<T.AuthInfoReq>) => {
   const { user, service } = ctx.state.auth;
+
+  // When authenticated via ForwardAuth headers, issue a JWT cookie so that
+  // cookie-dependent services (WebSocket, collaboration) can also authenticate.
+  if (service === FORWARDAUTH_SERVICE && !ctx.cookies.get("accessToken")) {
+    const expires = addMonths(new Date(), 3);
+    ctx.cookies.set("accessToken", user.getJwtToken(expires, service), {
+      sameSite: "lax",
+      expires,
+    });
+  }
+
   const sessions = getSessionsInCookie(ctx);
   const signedInTeamIds = Object.keys(sessions);
 
