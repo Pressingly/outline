@@ -307,11 +307,11 @@ describe("Authentication middleware", () => {
 
   describe("with ForwardAuth headers", () => {
     beforeEach(() => {
-      env.FORWARD_AUTH_ENABLED = true;
+      env.AUTH_TYPE = "SSO";
     });
 
     afterEach(() => {
-      env.FORWARD_AUTH_ENABLED = false;
+      env.AUTH_TYPE = undefined;
     });
 
     it("should authenticate an existing user via X-Auth-Request-Email", async () => {
@@ -331,6 +331,8 @@ describe("Authentication middleware", () => {
               return "";
             }),
           },
+          // @ts-expect-error mock cookies
+          cookies: { get: jest.fn(() => undefined), set: jest.fn() },
           state,
           ip: "127.0.0.1",
           cache: {},
@@ -363,6 +365,8 @@ describe("Authentication middleware", () => {
               return "";
             }),
           },
+          // @ts-expect-error mock cookies
+          cookies: { get: jest.fn(() => undefined), set: jest.fn() },
           state,
           ip: "127.0.0.1",
           cache: {},
@@ -395,6 +399,8 @@ describe("Authentication middleware", () => {
               return "";
             }),
           },
+          // @ts-expect-error mock cookies
+          cookies: { get: jest.fn(() => undefined), set: jest.fn() },
           state,
           ip: "127.0.0.1",
           cache: {},
@@ -402,12 +408,12 @@ describe("Authentication middleware", () => {
         jest.fn()
       );
 
-      expect(state.auth.user.email).toEqual(newEmail);
-      expect(state.auth.user.name).toEqual(newEmail.split("@")[0]);
+      expect(state.auth.user.email).toEqual(newEmail.toLowerCase());
+      expect(state.auth.user.name).toEqual(newEmail.toLowerCase().split("@")[0]);
     });
 
-    it("should not honour ForwardAuth headers when feature is disabled", async () => {
-      env.FORWARD_AUTH_ENABLED = false;
+    it("should not honour ForwardAuth headers when AUTH_TYPE is not SSO", async () => {
+      env.AUTH_TYPE = undefined;
       const state = {} as DefaultState;
       const authMiddleware = auth();
 
