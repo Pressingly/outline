@@ -24,6 +24,9 @@ import {
   UserSuspendedError,
 } from "../errors";
 
+/** Service identifier used by the ForwardAuth authentication flow. */
+export const FORWARDAUTH_SERVICE = "forwardauth";
+
 type AuthenticationOptions = {
   /** Role required to access the route. */
   role?: UserRole;
@@ -263,7 +266,7 @@ async function validateAuthentication(
     await apiKey.updateActiveAt();
   } else if (token.startsWith("fwd:") && env.AUTH_TYPE === "SSO") {
     type = AuthenticationType.APP;
-    service = "forwardauth";
+    service = FORWARDAUTH_SERVICE;
 
     const emailClaim = token.slice(4).toLowerCase().trim();
     const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailClaim);
@@ -297,7 +300,7 @@ async function validateAuthentication(
           name: env.APP_NAME,
           subdomain,
           authenticationProviders: [
-            { name: "forwardauth", providerId: domain ?? "forwardauth" },
+            { name: FORWARDAUTH_SERVICE, providerId: domain ?? FORWARDAUTH_SERVICE },
           ],
         })
       );
