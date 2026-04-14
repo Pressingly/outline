@@ -1,3 +1,4 @@
+import { addMonths } from "date-fns";
 import type { Next } from "koa";
 import capitalize from "lodash/capitalize";
 import { Op } from "sequelize";
@@ -51,6 +52,22 @@ export default function auth(options: AuthenticationOptions = {}) {
       const { type, token, user, service, scope } =
         await validateAuthentication(ctx, options);
 
+      // On the first ForwardAuth-authenticated request, issue a JWT cookie so
+      // that subsequent requests and cookie-dependent services (WebSocket,
+      // collaboration) use the fast JWT path instead of the header DB path.
+      if (service === FORWARDAUTH_SERVICE && !ctx.cookies.get("accessToken")) {
+        const expires = addMonths(new Date(), 3);
+        ctx.cookies.set("accessToken", user.getJwtToken(expires, service), {
+          sameSite: "lax",
+          expires,
+        });
+        ctx.cookies.set("lastSignedIn", FORWARDAUTH_SERVICE, {
+          httpOnly: false,
+          sameSite: "lax",
+          expires: new Date("2100"),
+        });
+      }
+
       await Promise.all([
         user.updateActiveAt(ctx),
         user.team?.updateActiveAt(),
@@ -93,18 +110,6 @@ export default function auth(options: AuthenticationOptions = {}) {
  * @returns An object containing the token and its transport method.
  */
 export function parseAuthentication(ctx: AppContext): AuthInput {
-  // When SSO auth type is configured, check for proxy-injected identity headers first.
-  // These are set by authenticating proxies such as oauth2-proxy or Authelia.
-  if (env.AUTH_TYPE === "SSO") {
-    const authRequestEmail = ctx.request.get("x-auth-request-email");
-    if (authRequestEmail) {
-      return {
-        token: `fwd:${authRequestEmail}`,
-        transport: "header",
-      };
-    }
-  }
-
   const authorizationHeader = ctx.request.get("authorization");
 
   if (authorizationHeader) {
@@ -145,6 +150,20 @@ export function parseAuthentication(ctx: AppContext): AuthInput {
       return {
         token: accessToken,
         transport: "cookie",
+      };
+    }
+  }
+
+  // Check proxy-injected identity headers last — after all conventional
+  // credentials — so an existing session cookie (or Bearer token) is always
+  // preferred. This means once the JWT cookie has been issued the header path
+  // is bypassed entirely, avoiding a DB round-trip on every request.
+  if (env.AUTH_TYPE === "SSO") {
+    const authRequestEmail = ctx.request.get("x-auth-request-email");
+    if (authRequestEmail) {
+      return {
+        token: `fwd:${authRequestEmail}`,
+        transport: "header",
       };
     }
   }
@@ -285,37 +304,38 @@ async function validateAuthentication(
       ctx.request.get("x-auth-request-user") || localPart;
     const { domain } = parseEmail(email);
 
-    // Self-hosted deployments have a single team. When none exists yet the
-    // first arriving user bootstraps the installation.
-    let team = await Team.findOne();
-    let isNewTeam = false;
-
-    if (!team) {
-      Logger.info("authentication", "Provisioning new team via ForwardAuth", {
-        domain,
-      });
-      const subdomain = slugifyDomain(domain ?? "team");
-      team = await sequelize.transaction((transaction) =>
-        teamCreator(createContext({ ip: ctx.ip, transaction }), {
-          name: env.APP_NAME,
-          subdomain,
-          authenticationProviders: [
-            { name: FORWARDAUTH_SERVICE, providerId: domain ?? FORWARDAUTH_SERVICE },
-          ],
-        })
-      );
-      isNewTeam = true;
-    }
-
-    // Find an existing user or provision a new one.
+    // Find an existing user by email across all teams (self-hosted deployments
+    // have a single team, but we don't restrict by team here so that the lookup
+    // is reliable even in test environments with multiple teams).
     user = await User.scope("withTeam").findOne({
       where: {
         email: { [Op.iLike]: email },
-        teamId: team.id,
       },
     });
 
     if (!user) {
+      // Self-hosted deployments have a single team. When none exists yet the
+      // first arriving user bootstraps the installation.
+      let team = await Team.findOne();
+      let isNewTeam = false;
+
+      if (!team) {
+        Logger.info("authentication", "Provisioning new team via ForwardAuth", {
+          domain,
+        });
+        const subdomain = slugifyDomain(domain ?? "team");
+        team = await sequelize.transaction((transaction) =>
+          teamCreator(createContext({ ip: ctx.ip, transaction }), {
+            name: env.APP_NAME,
+            subdomain,
+            authenticationProviders: [
+              { name: FORWARDAUTH_SERVICE, providerId: domain ?? FORWARDAUTH_SERVICE },
+            ],
+          })
+        );
+        isNewTeam = true;
+      }
+
       Logger.info("authentication", "Provisioning new user via ForwardAuth", {
         email,
       });

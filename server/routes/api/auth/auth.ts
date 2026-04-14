@@ -1,4 +1,4 @@
-import { addMonths, subHours, subMinutes } from "date-fns";
+import { subHours, subMinutes } from "date-fns";
 import Router from "koa-router";
 import uniqBy from "lodash/uniqBy";
 import { TeamPreference } from "@shared/types";
@@ -117,20 +117,10 @@ router.post("auth.config", async (ctx: APIContext<T.AuthConfigReq>) => {
 });
 
 /** Authentication services that don't require SSO validation. */
-const NON_SSO_SERVICES = ["email", "passkeys"];
+const NON_SSO_SERVICES = ["email", "passkeys", FORWARDAUTH_SERVICE];
 
 router.post("auth.info", auth(), async (ctx: APIContext<T.AuthInfoReq>) => {
   const { user, service } = ctx.state.auth;
-
-  // When authenticated via ForwardAuth headers, issue a JWT cookie so that
-  // cookie-dependent services (WebSocket, collaboration) can also authenticate.
-  if (service === FORWARDAUTH_SERVICE && !ctx.cookies.get("accessToken")) {
-    const expires = addMonths(new Date(), 3);
-    ctx.cookies.set("accessToken", user.getJwtToken(expires, service), {
-      sameSite: "lax",
-      expires,
-    });
-  }
 
   const sessions = getSessionsInCookie(ctx);
   const signedInTeamIds = Object.keys(sessions);
