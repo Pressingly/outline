@@ -26,7 +26,7 @@ function createCtx(overrides: any = {}) {
       body: {},
 
       get: vi.fn((key: string) => {
-        if (key.toLowerCase() === "authorization") return null;
+        if (key.toLowerCase() === "authorization") { return null; }
         return null;
       }),
 
@@ -568,7 +568,7 @@ describe("Authentication middleware - cookie cleanup regression", () => {
       },
       cookies: {
         get: vi.fn((key: string) => {
-          if (key === "accessToken") return "cookie-token";
+          if (key === "accessToken") { return "cookie-token"; }
           return undefined;
         }),
       },
@@ -604,7 +604,7 @@ describe("Authentication middleware - cookie cleanup regression", () => {
       cache: {},
       request: {
         get: vi.fn((header: string) => {
-          if (header === "authorization") return "Bearer fake.jwt.token";
+          if (header === "authorization") { return "Bearer fake.jwt.token"; }
           return undefined;
         }),
       },
