@@ -1,8 +1,8 @@
 import passport from "@outlinewiki/koa-passport";
-import { addMonths } from "date-fns";
 import Koa from "koa";
 import bodyParser from "koa-body";
 import Router from "koa-router";
+import env from "@server/env";
 import { AuthenticationError } from "@server/errors";
 import authMiddleware from "@server/middlewares/authentication";
 import coalesceBody from "@server/middlewares/coaleseBody";
@@ -43,7 +43,7 @@ router.get("/redirect", authMiddleware(), async (ctx: APIContext) => {
 
   ctx.cookies.set("accessToken", jwtToken, {
     sameSite: "lax",
-    expires: addMonths(new Date(), 3),
+    expires: new Date(Date.now() + env.SESSION_TTL_SECONDS * 1000),
   });
   const [team, collection, view] = await Promise.all([
     Team.findByPk(user.teamId),

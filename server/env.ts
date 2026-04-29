@@ -538,6 +538,18 @@ export class Environment {
     environment.DEFAULT_EMAIL_DOMAIN ?? "askii.ai";
 
   /**
+   * Lifetime in seconds of the JWT cookie minted on ForwardAuth login. Wired
+   * to the devstack-wide SESSION_TTL_SECONDS so this app's session matches
+   * Plane / Penpot / SurfSense / Twenty / oauth2-proxy. Falls back to 8h.
+   */
+  @IsOptional()
+  @IsNumber()
+  public SESSION_TTL_SECONDS = parseInt(
+    environment.SESSION_TTL_SECONDS ?? "28800",
+    10
+  );
+
+  /**
    * A boolean switch to toggle the rate limiter at application web server.
    */
   @IsOptional()

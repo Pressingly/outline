@@ -1,4 +1,3 @@
-import { addMonths } from "date-fns";
 import type { Next } from "koa";
 import capitalize from "lodash/capitalize";
 import { Op } from "sequelize";
@@ -55,8 +54,10 @@ export default function auth(options: AuthenticationOptions = {}) {
       // On the first ForwardAuth-authenticated request, issue a JWT cookie so
       // that subsequent requests and cookie-dependent services (WebSocket,
       // collaboration) use the fast JWT path instead of the header DB path.
+      // Lifetime tracks SESSION_TTL_SECONDS so Outline's session matches the
+      // rest of the devstack instead of stranding users on a 3-month cookie.
       if (service === FORWARDAUTH_SERVICE && !ctx.cookies.get("accessToken")) {
-        const expires = addMonths(new Date(), 3);
+        const expires = new Date(Date.now() + env.SESSION_TTL_SECONDS * 1000);
         ctx.cookies.set("accessToken", user.getJwtToken(expires, service), {
           sameSite: "lax",
           expires,
