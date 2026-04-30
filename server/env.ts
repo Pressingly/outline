@@ -557,8 +557,7 @@ export class Environment {
    * Default email domain for ForwardAuth users.
    */
   @IsOptional()
-  public DEFAULT_EMAIL_DOMAIN =
-    environment.DEFAULT_EMAIL_DOMAIN ?? "askii.ai";
+  public DEFAULT_EMAIL_DOMAIN = environment.DEFAULT_EMAIL_DOMAIN ?? "askii.ai";
 
   /**
    * A boolean switch to toggle the rate limiter at application web server.
@@ -843,6 +842,14 @@ export class Environment {
    */
   @Public
   public APP_NAME = "Outline";
+
+  /**
+   * The subdomain name of the portal (e.g. "moneta" for moneta.example.com).
+   * Used to redirect users to the portal after logout. Defaults to "foss".
+   */
+  @Public
+  @IsOptional()
+  public SMB_NAME = environment.SMB_NAME ?? "moneta";
 
   /**
    * Gravity constant for time decay in popularity scoring. Higher values cause
