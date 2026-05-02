@@ -538,16 +538,6 @@ export class Environment {
     environment.DEFAULT_EMAIL_DOMAIN ?? "askii.ai";
 
   /**
-   * Portal hostname prefix used by the SPA logout redirect.
-   * Required (no default) — the SPA crashes loudly on misconfig instead of
-   * silently redirecting to the wrong host. Container env name is uniform
-   * across every devstack app; see sso-rules RULES.md §1 Logout.
-   */
-  @Public
-  @IsNotEmpty()
-  public SMB_NAME = environment.SMB_NAME ?? "";
-
-  /**
    * A boolean switch to toggle the rate limiter at application web server.
    */
   @IsOptional()

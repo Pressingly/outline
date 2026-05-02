@@ -352,10 +352,9 @@ export default class AuthStore extends Store<Team> {
     }
 
     if (userInitiated) {
-      // Rewrite "<SMB_NAME>-<app>.<domain>" → "<SMB_NAME>.<domain>" so we land on the
+      // Rewrite "<prefix>-<app>.<domain>" → "<prefix>.<domain>" so we land on the
       // portal (outside ForwardAuth) instead of Outline's own root, which would silently re-auth.
-      const smbName = env.SMB_NAME.trim();
-      const portalHost = window.location.hostname.replace(/^[^.]*\./, `${smbName}.`);
+      const portalHost = window.location.hostname.replace(/^([^-]+)-[^.]+\.(.+)/, "$1.$2");
       this.logoutRedirectUri = `${window.location.protocol}//${portalHost}`;
     }
 
