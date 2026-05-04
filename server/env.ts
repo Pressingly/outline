@@ -810,7 +810,7 @@ export class Environment {
    * The full URL of the SMB dashboard to redirect to after logout.
    */
   @Public
-  @IsNotEmpty()
+  @IsOptional()
   @IsUrl({
     protocols: ["http", "https"],
     require_protocol: true,
@@ -819,7 +819,7 @@ export class Environment {
   public SMB_DASHBOARD_URL = (environment.SMB_DASHBOARD_URL ?? "").replace(
     /\/$/,
     ""
-  );
+  ) || undefined;
 
   /**
    * Gravity constant for time decay in popularity scoring. Higher values cause
