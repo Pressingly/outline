@@ -105,6 +105,7 @@ export type PublicEnv = {
   ROOT_SHARE_ID?: string;
   AUTH_TYPE?: string;
   SMB_NAME?: string;
+  SMB_DASHBOARD_URL: string;
   analytics: {
     service: IntegrationService;
     settings: IntegrationSettings<IntegrationType.Analytics>;

@@ -807,6 +807,21 @@ export class Environment {
   public SMB_NAME = environment.SMB_NAME ?? "moneta";
 
   /**
+   * The full URL of the SMB dashboard to redirect to after logout.
+   */
+  @Public
+  @IsNotEmpty()
+  @IsUrl({
+    protocols: ["http", "https"],
+    require_protocol: true,
+    require_tld: false,
+  })
+  public SMB_DASHBOARD_URL = (environment.SMB_DASHBOARD_URL ?? "").replace(
+    /\/$/,
+    ""
+  );
+
+  /**
    * Gravity constant for time decay in popularity scoring. Higher values cause
    * faster decay of older content. Default is 0.7.
    */
