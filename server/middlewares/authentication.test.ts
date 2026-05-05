@@ -13,7 +13,23 @@ import { User } from "@server/models";
 import { AuthenticationType } from "@server/types";
 import auth, { FORWARDAUTH_SERVICE } from "./authentication";
 
-function createCtx(overrides: any = {}) {
+interface MockCtxOverride {
+  originalUrl?: string;
+  request?: {
+    headers?: Record<string, string>;
+    body?: Record<string, unknown>;
+    url?: string;
+  };
+  cookies?: {
+    get: (key: string) => string | undefined;
+    set?: (key: string, value: string, opts?: object) => void;
+  };
+  state?: object;
+  ip?: string;
+  cache?: object;
+}
+
+function createCtx(overrides: MockCtxOverride = {}) {
   const headers = {
     ...(overrides.request?.headers || {}),
   };
@@ -270,7 +286,7 @@ describe("Authentication middleware", () => {
         scope: [Scope.Read],
       });
 
-      const ctx: any = createCtx({
+      const ctx = createCtx({
         originalUrl: "/api/users.info",
         request: {
           body: {
@@ -281,12 +297,13 @@ describe("Authentication middleware", () => {
 
       const authMiddleware = auth();
 
-      let error: any;
+      let error;
 
       try {
+        // @ts-expect-error mock context
         await authMiddleware(ctx, vi.fn());
         throw new Error("Expected middleware to throw");
-      } catch (e: any) {
+      } catch (e) {
         error = e;
       }
 
@@ -517,7 +534,7 @@ describe("Authentication middleware", () => {
           {
             // @ts-expect-error mock request
             request: {
-              get: jest.fn((header: string) => {
+              get: vi.fn((header: string) => {
                 if (header === "x-auth-request-email") {
                   return localPart;
                 }
@@ -525,12 +542,12 @@ describe("Authentication middleware", () => {
               }),
             },
             // @ts-expect-error mock cookies
-            cookies: { get: jest.fn(() => undefined), set: jest.fn() },
+            cookies: { get: vi.fn(() => undefined), set: vi.fn() },
             state,
             ip: "127.0.0.1",
             cache: {},
           },
-          jest.fn()
+          vi.fn()
         );
 
         expect(state.auth.user.email).toEqual(`${localPart.toLowerCase()}@askii.ai`);
@@ -603,30 +620,33 @@ describe("Authentication middleware - cookie cleanup regression", () => {
   it("clears auth cookies on 401 when using cookie JWT (no Authorization header)", async () => {
     const state = {} as DefaultState;
 
-    const ctx: any = {
-      state,
-      cache: {},
-      request: {
-        get: vi.fn(() => undefined),
-      },
-      cookies: {
-        get: vi.fn((key: string) => {
-          if (key === "accessToken") {
-            return "cookie-token";
-          }
-          return undefined;
-        }),
-      },
-    };
-
     const authMiddleware = auth();
 
-    let err: any;
+    let err;
 
     try {
-      await authMiddleware(ctx, async () => {
-        throw Object.assign(new Error("fail"), { status: 401 });
-      });
+      await authMiddleware(
+        {
+          state,
+          cache: {},
+          // @ts-expect-error mock request
+          request: {
+            get: vi.fn(() => ""),
+          },
+          // @ts-expect-error mock cookies
+          cookies: {
+            get: vi.fn((key: string) => {
+              if (key === "accessToken") {
+                return "cookie-token";
+              }
+              return undefined;
+            }),
+          },
+        },
+        async () => {
+          throw Object.assign(new Error("fail"), { status: 401 });
+        }
+      );
     } catch (e) {
       err = e;
     }
@@ -644,30 +664,33 @@ describe("Authentication middleware - cookie cleanup regression", () => {
   it("does NOT clear cookies when Authorization header is present", async () => {
     const state = {} as DefaultState;
 
-    const ctx: any = {
-      state,
-      cache: {},
-      request: {
-        get: vi.fn((header: string) => {
-          if (header === "authorization") {
-            return "Bearer fake.jwt.token";
-          }
-          return undefined;
-        }),
-      },
-      cookies: {
-        get: vi.fn(() => "cookie-token"),
-      },
-    };
-
     const authMiddleware = auth();
 
-    let err: any;
+    let err;
 
     try {
-      await authMiddleware(ctx, async () => {
-        throw Object.assign(new Error("fail"), { status: 401 });
-      });
+      await authMiddleware(
+        {
+          state,
+          cache: {},
+          // @ts-expect-error mock request
+          request: {
+            get: vi.fn((header: string) => {
+              if (header === "authorization") {
+                return "Bearer fake.jwt.token";
+              }
+              return "";
+            }),
+          },
+          // @ts-expect-error mock cookies
+          cookies: {
+            get: vi.fn(() => "cookie-token"),
+          },
+        },
+        async () => {
+          throw Object.assign(new Error("fail"), { status: 401 });
+        }
+      );
     } catch (e) {
       err = e;
     }
