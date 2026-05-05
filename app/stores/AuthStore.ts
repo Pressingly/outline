@@ -352,7 +352,7 @@ export default class AuthStore extends Store<Team> {
     }
 
     if (userInitiated) {
-      const portalHost = window.location.hostname.replace(/^[^.]*\./, ``);
+      const portalHost = window.location.hostname.replace(/^[^.]+\.(?=[^.]*\.[^.]*\.)/, "");
       this.logoutRedirectUri = `${window.location.protocol}//${portalHost}`;
     }
 
