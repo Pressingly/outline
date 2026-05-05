@@ -29,7 +29,6 @@ if (hasManualConfig) {
     authorizationURL: env.OIDC_AUTH_URI!,
     tokenURL: env.OIDC_TOKEN_URI!,
     userInfoURL: env.OIDC_USERINFO_URI!,
-    logoutURL: env.OIDC_LOGOUT_URI,
   });
   Logger.info("plugins", "OIDC endpoints mounted with manual configuration");
 } else if (hasIssuerConfig) {
@@ -50,7 +49,6 @@ if (hasManualConfig) {
         authorizationURL: oidcConfig.authorization_endpoint,
         tokenURL: oidcConfig.token_endpoint,
         userInfoURL: oidcConfig.userinfo_endpoint,
-        logoutURL: oidcConfig.end_session_endpoint,
         pkce: oidcConfig.code_challenge_methods_supported?.includes("S256"),
       });
 

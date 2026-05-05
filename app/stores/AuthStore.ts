@@ -352,7 +352,7 @@ export default class AuthStore extends Store<Team> {
     }
 
     if (userInitiated) {
-      this.logoutRedirectUri = window.env.SMB_DASHBOARD_URL;
+      this.logoutRedirectUri = window.env.SIGNOUT_URL;
     }
 
     if (clearCache) {

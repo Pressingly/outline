@@ -95,16 +95,6 @@ class OIDCPluginEnvironment extends Environment {
     environment.OIDC_DISABLE_REDIRECT
   );
 
-  /**
-   * The OIDC logout endpoint.
-   */
-  @Public
-  @IsOptional()
-  @IsUrl({
-    require_tld: false,
-    allow_underscores: true,
-  })
-  public OIDC_LOGOUT_URI = this.toOptionalString(environment.OIDC_LOGOUT_URI);
 }
 
 export default new OIDCPluginEnvironment();

@@ -807,7 +807,7 @@ export class Environment {
   public SMB_NAME = environment.SMB_NAME ?? "moneta";
 
   /**
-   * The full URL of the SMB dashboard to redirect to after logout.
+   * The full URL to redirect to after logout.
    */
   @Public
   @IsOptional()
@@ -816,7 +816,7 @@ export class Environment {
     require_protocol: true,
     require_tld: false,
   })
-  public SMB_DASHBOARD_URL = (environment.SMB_DASHBOARD_URL ?? "").replace(
+  public SIGNOUT_URL = (environment.SIGNOUT_URL ?? "").replace(
     /\/$/,
     ""
   ) || undefined;

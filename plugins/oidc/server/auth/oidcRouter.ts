@@ -32,7 +32,6 @@ export interface OIDCEndpoints {
   authorizationURL: string;
   tokenURL: string;
   userInfoURL: string;
-  logoutURL?: string;
   pkce?: boolean;
 }
 
