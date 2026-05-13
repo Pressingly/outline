@@ -538,6 +538,16 @@ export class Environment {
     environment.DEFAULT_EMAIL_DOMAIN ?? "askii.ai";
 
   /**
+   * The lifetime of the accessToken JWT cookie in seconds. Controls how long
+   * users remain signed in. Defaults to 28800 seconds (8 hours) to match the
+   * unified session window of the foss-server-bundle-devstack
+   * (oauth2-proxy / Plane / Penpot / SurfSense / Twenty).
+   */
+  @IsNumber()
+  public SESSION_TTL_SECONDS =
+    this.toOptionalNumber(environment.SESSION_TTL_SECONDS) ?? 28800;
+
+  /**
    * A boolean switch to toggle the rate limiter at application web server.
    */
   @IsOptional()

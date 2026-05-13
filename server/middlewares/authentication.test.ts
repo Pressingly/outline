@@ -379,7 +379,7 @@ describe("Authentication middleware", () => {
       expect(state.auth.type).toEqual(AuthenticationType.APP);
     });
 
-    it("should issue the accessToken cookie with a 7-day expiry", async () => {
+    it("should issue the accessToken cookie with an expiry matching SESSION_TTL_SECONDS", async () => {
       const team = await buildTeam();
       const user = await buildUser({ teamId: team.id });
       const state = {} as DefaultState;
@@ -414,10 +414,10 @@ describe("Authentication middleware", () => {
 
       const expires: Date = accessTokenCall![2].expires;
       const ageMs = expires.getTime() - before;
-      const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+      const expectedMs = env.SESSION_TTL_SECONDS * 1000;
       // Allow ±60s skew for test runtime.
-      expect(ageMs).toBeGreaterThan(sevenDaysMs - 60_000);
-      expect(ageMs).toBeLessThan(sevenDaysMs + 60_000);
+      expect(ageMs).toBeGreaterThan(expectedMs - 60_000);
+      expect(ageMs).toBeLessThan(expectedMs + 60_000);
     });
 
     it("should provision a new user when X-Auth-Request-Email is unknown", async () => {
