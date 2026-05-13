@@ -1,7 +1,6 @@
 import { addDays } from "date-fns";
 import type { Next } from "koa";
 import capitalize from "lodash/capitalize";
-import { Op } from "sequelize";
 import { UserRole } from "@shared/types";
 import { slugifyDomain } from "@shared/utils/domains";
 import { parseEmail } from "@shared/utils/email";
@@ -322,13 +321,12 @@ async function validateAuthentication(
     const displayName = ctx.request.get("x-auth-request-user") || localPart;
     const { domain } = parseEmail(email);
 
-    // Find an existing user by email across all teams (self-hosted deployments
-    // have a single team, but we don't restrict by team here so that the lookup
-    // is reliable even in test environments with multiple teams).
+    // Exact match on the canonical lowercased email — never LIKE. Using LIKE
+    // here would let SQL wildcard metacharacters (%, _) in the supplied value
+    // match arbitrary users (e.g. "%@%.%" matches the first row, often the
+    // bootstrap admin).
     user = await User.scope("withTeam").findOne({
-      where: {
-        email: { [Op.iLike]: email },
-      },
+      where: { email },
     });
 
     if (!user) {

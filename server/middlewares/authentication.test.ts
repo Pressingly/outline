@@ -525,6 +525,39 @@ describe("Authentication middleware", () => {
       }
     });
 
+    it("should not match existing users via SQL LIKE wildcard characters", async () => {
+      const team = await buildTeam();
+      const existingUser = await buildUser({ teamId: team.id });
+      const state = {} as DefaultState;
+      const authMiddleware = auth();
+
+      await authMiddleware(
+        {
+          // @ts-expect-error mock request
+          request: {
+            get: jest.fn((header: string) => {
+              if (header === "x-auth-request-email") {
+                return "%@%.%";
+              }
+              return "";
+            }),
+          },
+          // @ts-expect-error mock cookies
+          cookies: { get: jest.fn(() => undefined), set: jest.fn() },
+          state,
+          ip: "127.0.0.1",
+          cache: {},
+        },
+        jest.fn()
+      );
+
+      // Under Op.iLike the wildcard would have matched the existing user.
+      // With exact-match the lookup misses and a separate (junk) account
+      // is provisioned — the existing user is never impersonated.
+      expect(state.auth.user.id).not.toEqual(existingUser.id);
+      expect(state.auth.user.email).not.toEqual(existingUser.email);
+    });
+
     it("should not honour ForwardAuth headers when AUTH_TYPE is not SSO", async () => {
       env.AUTH_TYPE = undefined;
       const state = {} as DefaultState;
