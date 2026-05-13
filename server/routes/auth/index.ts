@@ -1,4 +1,5 @@
 import passport from "@outlinewiki/koa-passport";
+import { addDays } from "date-fns";
 import Koa from "koa";
 import bodyParser from "koa-body";
 import Router from "koa-router";
@@ -43,7 +44,7 @@ router.get("/redirect", authMiddleware(), async (ctx: APIContext) => {
 
   ctx.cookies.set("accessToken", jwtToken, {
     sameSite: "lax",
-    expires: new Date(Date.now() + env.SESSION_TTL_SECONDS * 1000),
+    expires: addDays(new Date(), 7),
   });
   const [team, collection, view] = await Promise.all([
     Team.findByPk(user.teamId),
