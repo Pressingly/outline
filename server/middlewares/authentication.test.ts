@@ -11,6 +11,7 @@ import {
 } from "@server/test/factories";
 import { User } from "@server/models";
 import { AuthenticationType } from "@server/types";
+import { JWT_COOKIE_TTL_DAYS } from "@server/utils/authentication";
 import auth, { FORWARDAUTH_SERVICE } from "./authentication";
 
 function createCtx(overrides: any = {}) {
@@ -377,6 +378,47 @@ describe("Authentication middleware", () => {
       expect(state.auth.user.id).toEqual(user.id);
       expect(state.auth.service).toEqual(FORWARDAUTH_SERVICE);
       expect(state.auth.type).toEqual(AuthenticationType.APP);
+    });
+
+    it("should issue the accessToken cookie with a 7-day expiry", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const state = {} as DefaultState;
+      const authMiddleware = auth();
+      const cookiesSet = jest.fn();
+      const before = Date.now();
+
+      await authMiddleware(
+        {
+          // @ts-expect-error mock request
+          request: {
+            get: jest.fn((header: string) => {
+              if (header === "x-auth-request-email") {
+                return user.email!;
+              }
+              return "";
+            }),
+          },
+          // @ts-expect-error mock cookies
+          cookies: { get: jest.fn(() => undefined), set: cookiesSet },
+          state,
+          ip: "127.0.0.1",
+          cache: {},
+        },
+        jest.fn()
+      );
+
+      const accessTokenCall = cookiesSet.mock.calls.find(
+        (call) => call[0] === "accessToken"
+      );
+      expect(accessTokenCall).toBeDefined();
+
+      const expires: Date = accessTokenCall![2].expires;
+      const ageMs = expires.getTime() - before;
+      const expectedMs = JWT_COOKIE_TTL_DAYS * 24 * 60 * 60 * 1000;
+      // Allow ±60s skew for test runtime.
+      expect(ageMs).toBeGreaterThan(expectedMs - 60_000);
+      expect(ageMs).toBeLessThan(expectedMs + 60_000);
     });
 
     it("should provision a new user when X-Auth-Request-Email is unknown", async () => {
