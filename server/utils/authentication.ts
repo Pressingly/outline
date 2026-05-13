@@ -1,4 +1,5 @@
 import querystring from "node:querystring";
+import { addDays } from "date-fns";
 import type { Context } from "koa";
 import pick from "lodash/pick";
 import { Client } from "@shared/types";
@@ -8,6 +9,14 @@ import Logger from "@server/logging/Logger";
 import { Event, Collection, View } from "@server/models";
 import type { APIContext, AuthenticationResult } from "@server/types";
 import { AuthenticationType } from "@server/types";
+
+/**
+ * Lifetime of the JWT cookie (`accessToken`) issued after Cognito sign-in.
+ * 7 days matches the rest of the foss-server-bundle-devstack
+ * (Plane / Penpot / SurfSense / Twenty / oauth2-proxy). Single source of
+ * truth for all three call sites that mint this cookie.
+ */
+export const JWT_COOKIE_TTL_DAYS = 7;
 
 /**
  * Parse and return the details from the "sessions" cookie in the request, if
@@ -87,9 +96,7 @@ export async function signIn(
   );
 
   const domain = getCookieDomain(ctx.request.hostname, env.isCloudHosted);
-  // Cookie lifetime is driven by SESSION_TTL_SECONDS (default 28800 = 8 hours)
-  // to match the rest of the foss-server-bundle-devstack.
-  const expires = new Date(Date.now() + env.SESSION_TTL_SECONDS * 1000);
+  const expires = addDays(new Date(), JWT_COOKIE_TTL_DAYS);
 
   // set a cookie for which service we last signed in with. This is
   // only used to display a UI hint for the user for next time
