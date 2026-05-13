@@ -1,4 +1,4 @@
-import { addMonths } from "date-fns";
+import { addDays } from "date-fns";
 import type { Next } from "koa";
 import capitalize from "lodash/capitalize";
 import { Op } from "sequelize";
@@ -18,6 +18,7 @@ import { User, Team, ApiKey, OAuthAuthentication } from "@server/models";
 import { sequelize } from "@server/storage/database";
 import type { AppContext } from "@server/types";
 import { AuthenticationType } from "@server/types";
+import { JWT_COOKIE_TTL_DAYS } from "@server/utils/authentication";
 import { getUserForJWT } from "@server/utils/jwt";
 import {
   AuthenticationError,
@@ -56,7 +57,7 @@ export default function auth(options: AuthenticationOptions = {}) {
       // that subsequent requests and cookie-dependent services (WebSocket,
       // collaboration) use the fast JWT path instead of the header DB path.
       if (service === FORWARDAUTH_SERVICE && !ctx.cookies.get("accessToken")) {
-        const expires = addMonths(new Date(), 3);
+        const expires = addDays(new Date(), JWT_COOKIE_TTL_DAYS);
         ctx.cookies.set("accessToken", user.getJwtToken(expires, service), {
           sameSite: "lax",
           expires,
