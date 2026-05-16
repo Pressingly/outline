@@ -49,6 +49,16 @@ class ApiClient {
   /** Map of in-flight POST requests for deduplication, keyed by path + body. */
   private inflightRequests = new Map<string, Promise<any>>();
 
+  /**
+   * Set once we've triggered a full-page reload to recover from an SSO
+   * stale-session 401 (proxy identity changed; server cleared the JWT
+   * cookie via err.headers; client must reload to pick up new identity).
+   * Used to silence subsequent in-flight 401s that would otherwise surface
+   * as "failed to get docs / access tokens" toasts during the brief window
+   * before the navigation completes.
+   */
+  private isReauthenticating = false;
+
   constructor(options: Options = {}) {
     this.baseUrl = options.baseUrl || "/api";
   }
@@ -189,8 +199,23 @@ class ApiClient {
           // We skip auth.logout() here: clearing MobX state would cause
           // <Authenticated> to render <Redirect to="/" /> and land the user on
           // the login page instead of their original document.
-          window.location.replace(window.location.href);
-          throw new AuthorizationError();
+          //
+          // Multiple parallel requests typically 401 together on the first
+          // post-switch render (docs, access tokens, etc.). Without the
+          // isReauthenticating guard, each one would throw an AuthorizationError
+          // that propagates to a toast handler ("failed to get docs / access
+          // tokens") before the page finishes navigating — visible flash of
+          // error UI for what is actually a successful identity-switch flow.
+          // First 401 triggers the reload; subsequent in-flight 401s stall on
+          // a never-resolving promise until the navigation completes.
+          if (!this.isReauthenticating) {
+            this.isReauthenticating = true;
+            window.location.replace(window.location.href);
+          }
+          return new Promise<T>(() => {
+            // Intentionally never resolves — the page is navigating away.
+            // Throwing would surface as a toast on each in-flight request.
+          });
         }
         await stores.auth.logout({
           savePath: true,
