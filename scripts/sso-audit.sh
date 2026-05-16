@@ -128,6 +128,13 @@ check_row_20() {
 
 # ============================================================================
 # Row 21 (idx 2): polynomial-regex avoidance in email-shape detection
+#
+# Detects the problematic pattern [^\s@]+@ which causes polynomial
+# backtracking. The pattern matches character classes that exclude both
+# whitespace (\s) and @ symbols, followed by +@ — this is the exact
+# construct that leads to catastrophic backtracking in email validation.
+# Using head -1 ensures only the first match is reported, preventing
+# newlines from breaking the markdown table output.
 # ============================================================================
 check_row_21() {
   if [[ ! -f "$AUTH_MIDDLEWARE" ]]; then
