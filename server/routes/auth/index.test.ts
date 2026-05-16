@@ -84,18 +84,18 @@ describe("auth/redirect", () => {
 });
 
 describe("auth/portal-logout", () => {
-  let originalAllowlist: string[];
+  let originalPlatformDomain: string;
 
   beforeEach(() => {
-    originalAllowlist = env.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS;
+    originalPlatformDomain = env.PLATFORM_DOMAIN;
   });
 
   afterEach(() => {
-    env.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS = originalAllowlist;
+    env.PLATFORM_DOMAIN = originalPlatformDomain;
   });
 
-  const setAllowlist = (entries: string[]) => {
-    env.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS = entries;
+  const setPlatformDomain = (domain: string) => {
+    env.PLATFORM_DOMAIN = domain;
   };
 
   /**
@@ -109,7 +109,7 @@ describe("auth/portal-logout", () => {
     new RegExp(`${name}=;[^,]*\\bpath=/(?:[;,]|$)`, "i");
 
   it("should clear accessToken and lastSignedIn cookies at path=/ on every call", async () => {
-    setAllowlist([]);
+    setPlatformDomain("");
     const res = await server.get("/auth/portal-logout", { redirect: "manual" });
     expect(res.status).toEqual(200);
     const setCookie = res.headers.get("set-cookie") ?? "";
@@ -120,7 +120,7 @@ describe("auth/portal-logout", () => {
   });
 
   it("should 302 to next when host is in the allowlist", async () => {
-    setAllowlist(["foss.arbisoft.com"]);
+    setPlatformDomain("foss.arbisoft.com");
     const target = "https://pm.foss.arbisoft.com/auth/portal-sign-out/";
     const res = await server.get(
       `/auth/portal-logout?next=${encodeURIComponent(target)}`,
@@ -134,7 +134,7 @@ describe("auth/portal-logout", () => {
   });
 
   it("should match subdomains of allowlist entries", async () => {
-    setAllowlist(["foss.arbisoft.com"]);
+    setPlatformDomain("foss.arbisoft.com");
     const target = "https://docs.foss.arbisoft.com/done";
     const res = await server.get(
       `/auth/portal-logout?next=${encodeURIComponent(target)}`,
@@ -145,21 +145,21 @@ describe("auth/portal-logout", () => {
   });
 
   it("should reject next on a host outside the allowlist", async () => {
-    setAllowlist(["foss.arbisoft.com"]);
+    setPlatformDomain("foss.arbisoft.com");
     const target = "https://evil.example/steal";
     const res = await server.get(
       `/auth/portal-logout?next=${encodeURIComponent(target)}`,
       { redirect: "manual" }
     );
     expect(res.status).toEqual(200);
-    // still clears cookies — non-redirect rejection isn't an error path
+    // still clears cookies at path=/ — non-redirect rejection isn't an error path
     const setCookie = res.headers.get("set-cookie") ?? "";
-    expect(setCookie).toMatch(/accessToken=;/);
+    expect(setCookie).toMatch(cookieClearedAtRoot("accessToken"));
   });
 
   it("should enforce dot-boundary on suffix matches", async () => {
     // "foss.arbisoft.com.evil" must NOT match "foss.arbisoft.com".
-    setAllowlist(["foss.arbisoft.com"]);
+    setPlatformDomain("foss.arbisoft.com");
     const target = "https://foss.arbisoft.com.evil.example/x";
     const res = await server.get(
       `/auth/portal-logout?next=${encodeURIComponent(target)}`,
@@ -168,8 +168,8 @@ describe("auth/portal-logout", () => {
     expect(res.status).toEqual(200);
   });
 
-  it("should reject every next when the allowlist is empty", async () => {
-    setAllowlist([]);
+  it("should reject every next when PLATFORM_DOMAIN is unset", async () => {
+    setPlatformDomain("");
     const res = await server.get(
       "/auth/portal-logout?next=https%3A%2F%2Ffoss.arbisoft.com%2F",
       { redirect: "manual" }
@@ -178,7 +178,7 @@ describe("auth/portal-logout", () => {
   });
 
   it("should reject malformed next values", async () => {
-    setAllowlist(["foss.arbisoft.com"]);
+    setPlatformDomain("foss.arbisoft.com");
     const res = await server.get(
       "/auth/portal-logout?next=not-a-url",
       { redirect: "manual" }
@@ -190,7 +190,7 @@ describe("auth/portal-logout", () => {
     // javascript:, data:, file:, etc. parse fine via new URL() but must
     // never be a valid next-hop — `<a href="javascript:…">` style would
     // execute in the user's browser if we 302'd to it.
-    setAllowlist(["foss.arbisoft.com"]);
+    setPlatformDomain("foss.arbisoft.com");
     for (const target of [
       "javascript:alert(1)",
       "data:text/html,<script>alert(1)</script>",
@@ -207,7 +207,7 @@ describe("auth/portal-logout", () => {
   it("should accept both http and https for allowlisted hosts", async () => {
     // http allowed for local-dev / localhost flows; https for production.
     // Beyond the two are rejected by the scheme gate.
-    setAllowlist(["foss.arbisoft.com"]);
+    setPlatformDomain("foss.arbisoft.com");
     for (const target of [
       "https://docs.foss.arbisoft.com/x",
       "http://docs.foss.arbisoft.com/x",
@@ -222,7 +222,7 @@ describe("auth/portal-logout", () => {
   });
 
   it("should not 302 when next is missing", async () => {
-    setAllowlist(["foss.arbisoft.com"]);
+    setPlatformDomain("foss.arbisoft.com");
     const res = await server.get("/auth/portal-logout", { redirect: "manual" });
     expect(res.status).toEqual(200);
     // cookies still cleared at path=/

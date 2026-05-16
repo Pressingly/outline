@@ -97,12 +97,15 @@ router.get("/redirect", authMiddleware(), async (ctx: APIContext) => {
 /**
  * Returns true iff `url` is a safe redirect target:
  *   - scheme is http or https (rejects javascript:, data:, etc.)
- *   - hostname matches an entry in `MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS`
+ *   - hostname is `PLATFORM_DOMAIN` itself or a subdomain of it
  *
  * Suffix match enforces a dot boundary: `foss.arbisoft.com` matches
  * `foss.arbisoft.com` and `*.foss.arbisoft.com` but NOT
  * `foss.arbisoft.com.evil.example`. Closes the obvious open-redirect
  * surface the endpoint would otherwise expose.
+ *
+ * When `PLATFORM_DOMAIN` is unset, every `next` is rejected — the
+ * endpoint still clears the cookie, it just won't follow a redirect.
  */
 function isAllowedSignOutNext(url: string): boolean {
   let parsed: URL;
@@ -121,12 +124,11 @@ function isAllowedSignOutNext(url: string): boolean {
   if (!host) {
     return false;
   }
-  for (const entry of env.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS) {
-    if (host === entry || host.endsWith("." + entry)) {
-      return true;
-    }
+  const platformDomain = env.PLATFORM_DOMAIN;
+  if (!platformDomain) {
+    return false;
   }
-  return false;
+  return host === platformDomain || host.endsWith("." + platformDomain);
 }
 
 /**
@@ -144,10 +146,10 @@ function isAllowedSignOutNext(url: string): boolean {
  * victim's session ends). Low impact — the only state lost is the
  * cookie, and ForwardAuth re-auths on the next request.
  *
- * Open-redirect protection: `next` is validated against
- * `MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS` (suffix-match on a dot boundary).
- * Empty allowlist rejects every `next` — cookies are still cleared, the
- * endpoint just returns 200 instead of 302.
+ * Open-redirect protection: `next` is validated against `PLATFORM_DOMAIN`
+ * (suffix-match on a dot boundary). Unset `PLATFORM_DOMAIN` rejects every
+ * `next` — cookies are still cleared, the endpoint just returns 200
+ * instead of 302.
  */
 router.get("/portal-logout", async (ctx: APIContext) => {
   const epoch = new Date(0);
