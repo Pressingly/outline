@@ -75,11 +75,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: sso-audit-output
-          path: sso-audit-output
+          path: .
 
       - name: Post sticky PR comment
         continue-on-error: true
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: sso-fork-audit
-          path: sso-audit-output/audit-output.md
+          path: audit-output.md
