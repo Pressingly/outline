@@ -537,21 +537,20 @@ export class Environment {
   public DEFAULT_EMAIL_DOMAIN = environment.DEFAULT_EMAIL_DOMAIN ?? "askii.ai";
 
   /**
-   * Comma-separated host suffixes the `/auth/portal-logout?next=…` endpoint
-   * is allowed to redirect to. Each entry matches its exact host plus all
-   * subdomains (e.g. `foss.arbisoft.com` matches `pm.foss.arbisoft.com`).
-   * Empty list rejects every `?next=` — the endpoint still clears the
-   * accessToken cookie, it just won't follow a redirect.
+   * Root domain of the foss-server-bundle deployment (set by
+   * `foss-server-bundle/platform.sh`). All app subdomains hang off this
+   * (e.g. `docs.${PLATFORM_DOMAIN}`, `pm.${PLATFORM_DOMAIN}`).
    *
-   * Used by the foss-server-bundle portal's "Log out of all apps"
-   * redirect chain.
+   * Used by `/auth/portal-logout?next=…` as the redirect allowlist: the
+   * endpoint will follow a `next` URL whose host matches `PLATFORM_DOMAIN`
+   * or any of its subdomains, and reject everything else. Unset →
+   * endpoint still clears cookies, just won't follow any redirect.
    */
   @IsOptional()
-  public MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS = (
-    this.toOptionalCommaList(environment.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS) ?? []
-  )
-    .map((h) => h.toLowerCase().replace(/^\.+/, ""))
-    .filter((h) => h.length > 0);
+  public PLATFORM_DOMAIN = (environment.PLATFORM_DOMAIN ?? "")
+    .toLowerCase()
+    .replace(/^\.+/, "")
+    .trim();
 
   /**
    * A boolean switch to toggle the rate limiter at application web server.
