@@ -98,13 +98,25 @@ describe("auth/portal-logout", () => {
     env.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS = entries;
   };
 
-  it("should clear accessToken and lastSignedIn cookies on every call", async () => {
+  /**
+   * Matches `<name>=;` followed (anywhere up to the next cookie boundary)
+   * by `path=/`. Regression guard for the path-scoping bug: without
+   * `path=/`, Set-Cookie defaults to `/auth/portal-logout`, which fails
+   * to shadow the original `path=/` cookie — the browser keeps the JWT
+   * and "logout" silently does nothing.
+   */
+  const cookieClearedAtRoot = (name: string) =>
+    new RegExp(`${name}=;[^,]*\\bpath=/(?:[;,]|$)`, "i");
+
+  it("should clear accessToken and lastSignedIn cookies at path=/ on every call", async () => {
     setAllowlist([]);
     const res = await server.get("/auth/portal-logout", { redirect: "manual" });
     expect(res.status).toEqual(200);
     const setCookie = res.headers.get("set-cookie") ?? "";
-    expect(setCookie).toMatch(/accessToken=;/);
-    expect(setCookie).toMatch(/lastSignedIn=;/);
+    // Both cookies cleared AND scoped to path=/ so they actually shadow
+    // the original login cookies in the browser.
+    expect(setCookie).toMatch(cookieClearedAtRoot("accessToken"));
+    expect(setCookie).toMatch(cookieClearedAtRoot("lastSignedIn"));
   });
 
   it("should 302 to next when host is in the allowlist", async () => {
@@ -116,9 +128,9 @@ describe("auth/portal-logout", () => {
     );
     expect(res.status).toEqual(302);
     expect(res.headers.get("location")).toEqual(target);
-    // cookies still cleared
+    // cookies still cleared at path=/
     const setCookie = res.headers.get("set-cookie") ?? "";
-    expect(setCookie).toMatch(/accessToken=;/);
+    expect(setCookie).toMatch(cookieClearedAtRoot("accessToken"));
   });
 
   it("should match subdomains of allowlist entries", async () => {
@@ -174,12 +186,47 @@ describe("auth/portal-logout", () => {
     expect(res.status).toEqual(200);
   });
 
+  it("should reject next with non-http(s) schemes", async () => {
+    // javascript:, data:, file:, etc. parse fine via new URL() but must
+    // never be a valid next-hop — `<a href="javascript:…">` style would
+    // execute in the user's browser if we 302'd to it.
+    setAllowlist(["foss.arbisoft.com"]);
+    for (const target of [
+      "javascript:alert(1)",
+      "data:text/html,<script>alert(1)</script>",
+      "file:///etc/passwd",
+    ]) {
+      const res = await server.get(
+        `/auth/portal-logout?next=${encodeURIComponent(target)}`,
+        { redirect: "manual" }
+      );
+      expect(res.status).toEqual(200);
+    }
+  });
+
+  it("should accept both http and https for allowlisted hosts", async () => {
+    // http allowed for local-dev / localhost flows; https for production.
+    // Beyond the two are rejected by the scheme gate.
+    setAllowlist(["foss.arbisoft.com"]);
+    for (const target of [
+      "https://docs.foss.arbisoft.com/x",
+      "http://docs.foss.arbisoft.com/x",
+    ]) {
+      const res = await server.get(
+        `/auth/portal-logout?next=${encodeURIComponent(target)}`,
+        { redirect: "manual" }
+      );
+      expect(res.status).toEqual(302);
+      expect(res.headers.get("location")).toEqual(target);
+    }
+  });
+
   it("should not 302 when next is missing", async () => {
     setAllowlist(["foss.arbisoft.com"]);
     const res = await server.get("/auth/portal-logout", { redirect: "manual" });
     expect(res.status).toEqual(200);
-    // cookies still cleared
+    // cookies still cleared at path=/
     const setCookie = res.headers.get("set-cookie") ?? "";
-    expect(setCookie).toMatch(/accessToken=;/);
+    expect(setCookie).toMatch(cookieClearedAtRoot("accessToken"));
   });
 });
