@@ -106,12 +106,12 @@ check_row_20() {
 
   # Primary marker: normalizeProxyEmail function (introduced by PR #19).
   local has_normalize_helper
-  has_normalize_helper=$(grep -cE "\bnormalizeProxyEmail\b" "$AUTH_MIDDLEWARE" || true)
+  has_normalize_helper=$(grep -cF "normalizeProxyEmail" "$AUTH_MIDDLEWARE" || true)
 
   # Fallback marker: "proxy identity" literal in a throw — used in the
   # AuthenticationError message when the mismatch fires.
   local has_throw_proxy
-  has_throw_proxy=$(grep -cE "throw\s+AuthenticationError\(.*[Pp]roxy" "$AUTH_MIDDLEWARE" || true)
+  has_throw_proxy=$(grep -cE "throw[[:space:]]+AuthenticationError\(.*[Pp]roxy" "$AUTH_MIDDLEWARE" || true)
 
   if [[ "$has_normalize_helper" -gt 0 ]]; then
     record 1 "✅" "$AUTH_MIDDLEWARE defines \`normalizeProxyEmail\` and uses it for bidirectional header normalisation — Rule 2 mismatch flush in place (flush mechanism: throw 401 → outer auth() catch clears accessToken cookie)"
@@ -136,7 +136,7 @@ check_row_21() {
   fi
 
   local hits
-  hits=$(grep -nE '\[\^[\\\\]s@\]\+@\[\^[\\\\]s@\]\+\\\.\[\^[\\\\]s@\]\+' "$AUTH_MIDDLEWARE" 2>/dev/null || true)
+  hits=$(grep -nE '\[\^\\s@\]\+@' "$AUTH_MIDDLEWARE" 2>/dev/null | head -1 || true)
 
   if [[ -n "$hits" ]]; then
     record 2 "❌" "Polynomial-backtracking email-shape regex detected in $AUTH_MIDDLEWARE: $hits. Rewrite to indexOf-based check per openspec proxy-auth-middleware §'email-shape detection SHALL avoid polynomial-backtracking regex'. Reference: \`normalizeProxyEmail\` in this file."
