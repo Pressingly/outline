@@ -95,26 +95,33 @@ router.get("/redirect", authMiddleware(), async (ctx: APIContext) => {
 });
 
 /**
- * Returns true iff `url`'s hostname matches an entry in
- * `MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS`. Suffix match enforces a dot boundary:
- * `foss.arbisoft.com` matches `foss.arbisoft.com` and `*.foss.arbisoft.com`
- * but NOT `foss.arbisoft.com.evil.example`. Closes the obvious open-redirect
+ * Returns true iff `url` is a safe redirect target:
+ *   - scheme is http or https (rejects javascript:, data:, etc.)
+ *   - hostname matches an entry in `MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS`
+ *
+ * Suffix match enforces a dot boundary: `foss.arbisoft.com` matches
+ * `foss.arbisoft.com` and `*.foss.arbisoft.com` but NOT
+ * `foss.arbisoft.com.evil.example`. Closes the obvious open-redirect
  * surface the endpoint would otherwise expose.
  */
 function isAllowedSignOutNext(url: string): boolean {
-  let host: string;
+  let parsed: URL;
   try {
-    host = new URL(url).hostname.toLowerCase();
+    parsed = new URL(url);
   } catch {
     return false;
   }
+  // Reject non-http(s) schemes outright — javascript: and data: parse fine
+  // but should never be a valid next-hop. https is required in production;
+  // http is allowed for dev/localhost flows.
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
   if (!host) {
     return false;
   }
   for (const entry of env.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS) {
-    if (!entry) {
-      continue;
-    }
     if (host === entry || host.endsWith("." + entry)) {
       return true;
     }
@@ -144,14 +151,22 @@ function isAllowedSignOutNext(url: string): boolean {
  */
 router.get("/portal-logout", async (ctx: APIContext) => {
   const epoch = new Date(0);
-  // Match the cookie-clear shape used by the auth() catch block at
-  // server/middlewares/authentication.ts: same names, same path, same
-  // sameSite. lastSignedIn is non-HttpOnly because the frontend reads it.
-  ctx.cookies.set("accessToken", "", { sameSite: "lax", expires: epoch });
+  // path:/ is load-bearing — without it Koa defaults the Set-Cookie path
+  // to the request URL (`/auth/portal-logout`), which doesn't shadow the
+  // original `accessToken` cookie's path:/ scope. The browser keeps the
+  // JWT. Matches the cookie-clear shape used by the auth() catch block
+  // at server/middlewares/authentication.ts:114-117.
+  ctx.cookies.set("accessToken", "", {
+    sameSite: "lax",
+    expires: epoch,
+    path: "/",
+  });
+  // lastSignedIn is non-HttpOnly because the frontend reads it.
   ctx.cookies.set("lastSignedIn", "", {
     httpOnly: false,
     sameSite: "lax",
     expires: epoch,
+    path: "/",
   });
 
   const nextRaw = String(ctx.query.next ?? "").trim();
