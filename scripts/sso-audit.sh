@@ -133,6 +133,12 @@ check_row_20() {
 # backtracking. The pattern matches character classes that exclude both
 # whitespace (\s) and @ symbols, followed by +@ — this is the exact
 # construct that leads to catastrophic backtracking in email validation.
+#
+# Note: The grep pattern '\[\^\\s@\]\+@' searches for the literal string
+# "[^\s@]+@" in the source code (where \s is a JavaScript regex token,
+# not a grep pattern). We're escaping the brackets and + to match them
+# literally in the source.
+#
 # Using head -1 ensures only the first match is reported, preventing
 # newlines from breaking the markdown table output.
 # ============================================================================
