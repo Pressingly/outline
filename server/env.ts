@@ -537,6 +537,23 @@ export class Environment {
   public DEFAULT_EMAIL_DOMAIN = environment.DEFAULT_EMAIL_DOMAIN ?? "askii.ai";
 
   /**
+   * Comma-separated host suffixes the `/auth/portal-logout?next=…` endpoint
+   * is allowed to redirect to. Each entry matches its exact host plus all
+   * subdomains (e.g. `foss.arbisoft.com` matches `pm.foss.arbisoft.com`).
+   * Empty list rejects every `?next=` — the endpoint still clears the
+   * accessToken cookie, it just won't follow a redirect.
+   *
+   * Used by the foss-server-bundle portal's "Log out of all apps"
+   * redirect chain.
+   */
+  @IsOptional()
+  public MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS = (
+    this.toOptionalCommaList(environment.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS) ?? []
+  )
+    .map((h) => h.toLowerCase().replace(/^\.+/, ""))
+    .filter((h) => h.length > 0);
+
+  /**
    * A boolean switch to toggle the rate limiter at application web server.
    */
   @IsOptional()

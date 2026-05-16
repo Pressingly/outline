@@ -3,6 +3,7 @@ import { addDays } from "date-fns";
 import Koa from "koa";
 import bodyParser from "koa-body";
 import Router from "koa-router";
+import env from "@server/env";
 import { AuthenticationError } from "@server/errors";
 import authMiddleware from "@server/middlewares/authentication";
 import coalesceBody from "@server/middlewares/coaleseBody";
@@ -91,6 +92,75 @@ router.get("/redirect", authMiddleware(), async (ctx: APIContext) => {
       ? `${team?.url}${collection.path}/recent`
       : `${team?.url}/home`
   );
+});
+
+/**
+ * Returns true iff `url`'s hostname matches an entry in
+ * `MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS`. Suffix match enforces a dot boundary:
+ * `foss.arbisoft.com` matches `foss.arbisoft.com` and `*.foss.arbisoft.com`
+ * but NOT `foss.arbisoft.com.evil.example`. Closes the obvious open-redirect
+ * surface the endpoint would otherwise expose.
+ */
+function isAllowedSignOutNext(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (!host) {
+    return false;
+  }
+  for (const entry of env.MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS) {
+    if (!entry) {
+      continue;
+    }
+    if (host === entry || host.endsWith("." + entry)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * GET /auth/portal-logout?next=<absolute_url>
+ *
+ * Clears the accessToken + lastSignedIn cookies and 302-redirects to
+ * `next`. Designed for the foss-server-bundle portal's "Log out of all
+ * apps" redirect chain — the portal navigates the browser through each
+ * app's logout URL, each step clearing its own cookies while the browser
+ * is on that app's own domain (so the Set-Cookie scope is correct).
+ *
+ * CSRF-exempt by design: the portal cannot share Outline's CSRF token
+ * cross-origin, so the existing POST + CSRF flow isn't usable here. The
+ * residual risk is force-logout (an attacker embeds an `<img>` and the
+ * victim's session ends). Low impact — the only state lost is the
+ * cookie, and ForwardAuth re-auths on the next request.
+ *
+ * Open-redirect protection: `next` is validated against
+ * `MPASS_SIGNOUT_NEXT_ALLOWED_HOSTS` (suffix-match on a dot boundary).
+ * Empty allowlist rejects every `next` — cookies are still cleared, the
+ * endpoint just returns 200 instead of 302.
+ */
+router.get("/portal-logout", async (ctx: APIContext) => {
+  const epoch = new Date(0);
+  // Match the cookie-clear shape used by the auth() catch block at
+  // server/middlewares/authentication.ts: same names, same path, same
+  // sameSite. lastSignedIn is non-HttpOnly because the frontend reads it.
+  ctx.cookies.set("accessToken", "", { sameSite: "lax", expires: epoch });
+  ctx.cookies.set("lastSignedIn", "", {
+    httpOnly: false,
+    sameSite: "lax",
+    expires: epoch,
+  });
+
+  const nextRaw = String(ctx.query.next ?? "").trim();
+  if (nextRaw && isAllowedSignOutNext(nextRaw)) {
+    ctx.redirect(nextRaw);
+    return;
+  }
+
+  ctx.body = { ok: true };
 });
 
 app.use(bodyParser());
