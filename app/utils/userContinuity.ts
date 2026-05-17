@@ -1,9 +1,42 @@
 // oxlint-disable-next-line import/no-unresolved
-import { getCookie } from "tiny-cookie";
+import { getCookie, removeCookie } from "tiny-cookie";
 import { deleteAllDatabases } from "~/utils/developer";
 import Logger from "~/utils/Logger";
 
 const LAST_USER_KEY = "outline_last_user_id";
+
+/**
+ * Storage keys + cookie names that carry user-tied state OUTSIDE
+ * the localStorage AUTH_STORE. Without clearing these, post-wipe
+ * the SPA still redirects to the previous user's URL via the
+ * AuthenticatedLayout's postLoginRedirectPath handling.
+ *
+ * - sessionStorage `postLoginRedirectPath` + cookie of the same
+ *   name: set by `setPostLoginPath` in `useLastVisitedPath.tsx`
+ *   when a logged-in user is bounced off an authenticated route.
+ *   AuthenticatedLayout consumes it on mount via `usePostLoginPath`
+ *   → `<Redirect to={postLoginPath} />`. Survives a localStorage
+ *   wipe because it lives in sessionStorage (and a cookie); if we
+ *   don't drop it, the wiped SPA re-mounts at /home, layout reads
+ *   the stale path, and redirects the new user to the previous
+ *   user's URL (e.g. a Collection they have no access to).
+ *
+ * - cookie `lastSignedIn`: set by `auth()` middleware alongside
+ *   `accessToken`. Surfaces "logged in via X" hints in the UI.
+ *   The server's stale-session 302 already clears it, but the
+ *   boot-time wipe path (cookie absent + marker present) needs
+ *   to clear it too — otherwise the UI may show the previous
+ *   provider on the login screen.
+ */
+function clearAuxiliaryUserState(): void {
+  try {
+    sessionStorage.removeItem("postLoginRedirectPath");
+  } catch {
+    // best effort
+  }
+  removeCookie("postLoginRedirectPath");
+  removeCookie("lastSignedIn");
+}
 
 /**
  * Decode the `accessToken` JWT cookie's payload to extract the
@@ -112,16 +145,48 @@ export async function cleanupCachesAndServiceWorkers(): Promise<void> {
  */
 export function checkUserContinuity(): void {
   const currentUserId = getCurrentUserIdFromCookie();
+  const lastUserId = localStorage.getItem(LAST_USER_KEY);
+
   if (!currentUserId) {
-    // No accessToken cookie. Either logged-out, or the server just
-    // cleared it (e.g. our stale-session middleware returned 302+clear
-    // on this exact response and the SPA is now booting at /home).
-    // Don't touch the marker — leave it for the next authenticated
-    // boot to compare against.
+    // No accessToken cookie. Two sub-cases:
+    //
+    // (a) No prior marker either — fresh browser, genuinely
+    //     unauthenticated boot. Nothing to do.
+    //
+    // (b) Marker exists from a prior authenticated session, but the
+    //     cookie is gone. This is the portal-logout-then-login-as-
+    //     different-user case: oauth2-proxy clears the upstream
+    //     session cookie + (depending on flow) the accessToken
+    //     cookie, the user re-authenticates via Cognito as a
+    //     different user, and the browser lands back on a URL that
+    //     used to belong to the previous user (e.g. the collection
+    //     they were viewing). At this point AUTH_STORE in
+    //     localStorage still holds the previous user's data; without
+    //     a wipe the SPA rehydrates that and the new fetchAuth
+    //     response races against it.
+    //
+    // For (b) we wipe and redirect to /home — same destination as
+    // the JWT-mismatch path. For (a) we just return.
+    if (lastUserId) {
+      Logger.info(
+        "lifecycle",
+        "Cookie cleared but prior-session marker present — wiping browser-local state"
+      );
+      try {
+        localStorage.clear();
+      } catch {
+        // best effort
+      }
+      clearAuxiliaryUserState();
+      Promise.all([
+        cleanupIndexedDB(),
+        cleanupCachesAndServiceWorkers(),
+      ]).finally(() => {
+        window.location.replace("/home");
+      });
+    }
     return;
   }
-
-  const lastUserId = localStorage.getItem(LAST_USER_KEY);
 
   if (lastUserId && lastUserId !== currentUserId) {
     Logger.info(
@@ -159,6 +224,7 @@ export function checkUserContinuity(): void {
     //                       (service workers cache /api responses here)
     //   - Service Worker → unregister all (forces re-registration on
     //                       the new session so SW state is per-user)
+    clearAuxiliaryUserState();
     Promise.all([
       cleanupIndexedDB(),
       cleanupCachesAndServiceWorkers(),
@@ -219,6 +285,7 @@ export async function wipeAndReload(): Promise<void> {
   } catch {
     // best effort
   }
+  clearAuxiliaryUserState();
   try {
     await Promise.race([
       Promise.all([

@@ -205,12 +205,21 @@ class ApiClient {
       const contentType = response.headers.get("content-type") || "";
       const finalUrlOffApi = !response.url.includes("/api/");
       const wasRedirected = response.redirected && finalUrlOffApi;
-      const gotHtmlOnApiCall = contentType.includes("text/html");
+      // Only treat HTML-on-API as a stale-session signal when the
+      // response is a SUCCESS (the 302→/home bounce ends up as 200
+      // HTML after fetch follows). A 502/503/4xx HTML error page —
+      // Traefik gateway error, oauth2-proxy expiry redirect, etc. —
+      // means the user has to re-auth via the normal channels but
+      // their browser-local state should NOT be wiped on a transient
+      // infrastructure hiccup. Gating on `success` keeps the wipe
+      // tightly scoped to the actual stale-session flow.
+      const gotHtmlOnApiCall = success && contentType.includes("text/html");
       if (wasRedirected || gotHtmlOnApiCall) {
         Logger.info("lifecycle", "Stale-session redirect detected", {
           redirected: response.redirected,
           finalUrl: response.url,
           contentType,
+          status: response.status,
         });
         await wipeAndReload();
         throw new AuthorizationError();

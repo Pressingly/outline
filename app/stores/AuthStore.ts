@@ -9,7 +9,7 @@ import { getCookieDomain, parseDomain } from "@shared/utils/domains";
 import type RootStore from "~/stores/RootStore";
 import Team from "~/models/Team";
 import env from "~/env";
-import { setPostLoginPath } from "~/hooks/useLastVisitedPath";
+import { clearLastVisitedPath, setPostLoginPath } from "~/hooks/useLastVisitedPath";
 import { client } from "~/utils/ApiClient";
 import Desktop from "~/utils/Desktop";
 import { deleteAllDatabases } from "~/utils/developer";
@@ -355,6 +355,8 @@ export default class AuthStore extends Store<Team> {
         Logger.error("Failed to delete authentication", err);
       }
     }
+
+    clearLastVisitedPath();
 
     // remove session record on apex cookie
     const team = this.team;
