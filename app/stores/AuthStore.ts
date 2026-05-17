@@ -212,7 +212,6 @@ export default class AuthStore extends Store<Team> {
       // us on the same wipeAndReload helper which is idempotent.
       if (env.AUTH_TYPE === "SSO" && !res?.data?.user) {
         Logger.warn(
-          "lifecycle",
           "/auth.info returned no user payload — assuming stale session"
         );
         await wipeAndReload();
