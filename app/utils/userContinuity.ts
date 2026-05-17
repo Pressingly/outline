@@ -4,6 +4,36 @@ import { deleteAllDatabases } from "~/utils/developer";
 import Logger from "~/utils/Logger";
 
 const LAST_USER_KEY = "outline_last_user_id";
+const POST_SWITCH_REDIRECT_HOME_ONCE_KEY =
+  "outline_post_switch_redirect_home_once";
+
+function markPostSwitchRedirectHome(): void {
+  try {
+    sessionStorage.setItem(POST_SWITCH_REDIRECT_HOME_ONCE_KEY, "true");
+  } catch {
+    // best effort
+  }
+}
+
+/**
+ * Consume and clear the one-time post-user-switch redirect marker.
+ *
+ * @returns true if the caller should force a redirect to the home route.
+ */
+export function consumePostSwitchRedirectHome(): boolean {
+  try {
+    const shouldRedirect =
+      sessionStorage.getItem(POST_SWITCH_REDIRECT_HOME_ONCE_KEY) === "true";
+    if (shouldRedirect) {
+      sessionStorage.removeItem(POST_SWITCH_REDIRECT_HOME_ONCE_KEY);
+      return true;
+    }
+  } catch {
+    // best effort
+  }
+
+  return false;
+}
 
 /**
  * Storage keys + cookie names that carry user-tied state OUTSIDE
@@ -182,6 +212,7 @@ export function checkUserContinuity(): void {
         cleanupIndexedDB(),
         cleanupCachesAndServiceWorkers(),
       ]).finally(() => {
+        markPostSwitchRedirectHome();
         window.location.replace("/home");
       });
     }
@@ -229,6 +260,7 @@ export function checkUserContinuity(): void {
       cleanupIndexedDB(),
       cleanupCachesAndServiceWorkers(),
     ]).finally(() => {
+      markPostSwitchRedirectHome();
       window.location.replace("/home");
     });
     return;
@@ -300,5 +332,6 @@ export async function wipeAndReload(): Promise<void> {
   } catch {
     // best effort
   }
+  markPostSwitchRedirectHome();
   window.location.replace("/home");
 }

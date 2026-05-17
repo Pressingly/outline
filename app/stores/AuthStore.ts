@@ -14,7 +14,11 @@ import { client } from "~/utils/ApiClient";
 import Desktop from "~/utils/Desktop";
 import { deleteAllDatabases } from "~/utils/developer";
 import Logger from "~/utils/Logger";
-import { wipeAndReload } from "~/utils/userContinuity";
+import { homePath } from "~/utils/routeHelpers";
+import {
+  consumePostSwitchRedirectHome,
+  wipeAndReload,
+} from "~/utils/userContinuity";
 import isCloudHosted from "~/utils/isCloudHosted";
 import Store from "./base/Store";
 
@@ -254,6 +258,11 @@ export default class AuthStore extends Store<Team> {
           parseDomain(hostname).teamSubdomain !== (data.team.subdomain ?? "")
         ) {
           window.location.href = `${data.team.url}${pathname}`;
+          return;
+        }
+
+        if (consumePostSwitchRedirectHome()) {
+          window.location.replace(homePath());
           return;
         }
 
