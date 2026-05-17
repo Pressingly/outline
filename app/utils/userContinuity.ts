@@ -1,5 +1,5 @@
 // oxlint-disable-next-line import/no-unresolved
-import { getCookie, removeCookie } from "tiny-cookie";
+import { getCookie, removeCookie, setCookie } from "tiny-cookie";
 import { deleteAllDatabases } from "~/utils/developer";
 import Logger from "~/utils/Logger";
 
@@ -13,6 +13,7 @@ function markPostSwitchRedirectHome(): void {
   } catch {
     // best effort
   }
+  setCookie(POST_SWITCH_REDIRECT_HOME_ONCE_KEY, "true", { expires: 1 / 24 });
 }
 
 /**
@@ -23,14 +24,18 @@ function markPostSwitchRedirectHome(): void {
 export function consumePostSwitchRedirectHome(): boolean {
   try {
     const shouldRedirect =
-      sessionStorage.getItem(POST_SWITCH_REDIRECT_HOME_ONCE_KEY) === "true";
+      sessionStorage.getItem(POST_SWITCH_REDIRECT_HOME_ONCE_KEY) === "true" ||
+      getCookie(POST_SWITCH_REDIRECT_HOME_ONCE_KEY) === "true";
     if (shouldRedirect) {
       sessionStorage.removeItem(POST_SWITCH_REDIRECT_HOME_ONCE_KEY);
+      removeCookie(POST_SWITCH_REDIRECT_HOME_ONCE_KEY);
       return true;
     }
   } catch {
     // best effort
   }
+
+  removeCookie(POST_SWITCH_REDIRECT_HOME_ONCE_KEY);
 
   return false;
 }
