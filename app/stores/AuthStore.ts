@@ -14,6 +14,7 @@ import { client } from "~/utils/ApiClient";
 import Desktop from "~/utils/Desktop";
 import { deleteAllDatabases } from "~/utils/developer";
 import Logger from "~/utils/Logger";
+import { wipeAndReload } from "~/utils/userContinuity";
 import isCloudHosted from "~/utils/isCloudHosted";
 import Store from "./base/Store";
 
@@ -201,6 +202,22 @@ export default class AuthStore extends Store<Team> {
       const res = await client.post("/auth.info", undefined, {
         credentials: "same-origin",
       });
+      // Stale-session fallback: if /auth.info came back without a
+      // parseable payload (e.g. the server bounced us to /home HTML
+      // and ApiClient's redirect detection didn't fire for some
+      // reason — SW intercept, missing response.redirected on some
+      // browser/network combos), wipe and reload before the invariant
+      // throws into the ErrorBoundary. This is belt-and-suspenders on
+      // top of ApiClient.fetch's primary detection; either path lands
+      // us on the same wipeAndReload helper which is idempotent.
+      if (env.AUTH_TYPE === "SSO" && !res?.data?.user) {
+        Logger.warn(
+          "lifecycle",
+          "/auth.info returned no user payload — assuming stale session"
+        );
+        await wipeAndReload();
+        return;
+      }
       invariant(res?.data, "Auth not available");
 
       runInAction("AuthStore#refresh", () => {

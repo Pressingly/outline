@@ -10,6 +10,7 @@ import {
   buildOAuthAuthentication,
 } from "@server/test/factories";
 import { User } from "@server/models";
+import { sequelize } from "@server/storage/database";
 import { AuthenticationType } from "@server/types";
 import { JWT_COOKIE_TTL_DAYS } from "@server/utils/authentication";
 import auth, { FORWARDAUTH_SERVICE } from "./authentication";
@@ -531,13 +532,23 @@ describe("Authentication middleware", () => {
       const state = {} as DefaultState;
       const authMiddleware = auth();
 
+      // RFC-5321 allows `%` and `_` in the local part, so this is a
+      // syntactically valid email that Sequelize's isEmail validator
+      // accepts. The `%` would be a SQL LIKE wildcard — under Op.iLike
+      // a clause like `email ILIKE 'attacker%@evil.com'` would match
+      // any existing email starting with `attacker` (e.g. the bootstrap
+      // admin). With exact-match the lookup misses; a separate (junk)
+      // account is provisioned instead. The existing user is never
+      // impersonated either way.
+      const wildcardEmail = "attacker%_@evil.example.com";
+
       await authMiddleware(
         {
           // @ts-expect-error mock request
           request: {
             get: jest.fn((header: string) => {
               if (header === "x-auth-request-email") {
-                return "%@%.%";
+                return wildcardEmail;
               }
               return "";
             }),
@@ -551,11 +562,222 @@ describe("Authentication middleware", () => {
         jest.fn()
       );
 
-      // Under Op.iLike the wildcard would have matched the existing user.
-      // With exact-match the lookup misses and a separate (junk) account
-      // is provisioned — the existing user is never impersonated.
       expect(state.auth.user.id).not.toEqual(existingUser.id);
       expect(state.auth.user.email).not.toEqual(existingUser.email);
+      // Provisioned user's email is the exact wildcard string, not a
+      // value resolved by pattern matching against existingUser.
+      expect(state.auth.user.email).toEqual(wildcardEmail);
+    });
+
+    it("should take the advisory lock before creating the ForwardAuth user", async () => {
+      // Race-protection regression guard. The pg_advisory_xact_lock MUST be
+      // taken before User.create — otherwise N parallel first-login
+      // requests for the same email could each pass the findOne miss and
+      // each insert a duplicate row (Outline has no unique constraint on
+      // users.email; see server/migrations/20170712055148-non-unique-email).
+      //
+      // If a future refactor moves User.create above the lock, or removes
+      // the lock entirely, this test fails.
+      await buildTeam();
+      const newEmail = `racetest-${randomString(6)}@example.com`;
+      const querySpy = jest.spyOn(sequelize, "query");
+      const createSpy = jest.spyOn(User, "create");
+
+      try {
+        const state = {} as DefaultState;
+        const authMiddleware = auth();
+
+        await authMiddleware(
+          {
+            // @ts-expect-error mock request
+            request: {
+              get: jest.fn((header: string) => {
+                if (header === "x-auth-request-email") {
+                  return newEmail;
+                }
+                return "";
+              }),
+            },
+            // @ts-expect-error mock cookies
+            cookies: { get: jest.fn(() => undefined), set: jest.fn() },
+            state,
+            ip: "127.0.0.1",
+            cache: {},
+          },
+          jest.fn()
+        );
+
+        // 1. The advisory lock was acquired at least once with the
+        //    email-keyed hash. Any sequelize.query() call whose first
+        //    arg contains "pg_advisory_xact_lock" counts.
+        const lockCallIndex = querySpy.mock.calls.findIndex(
+          ([sql]) =>
+            typeof sql === "string" && sql.includes("pg_advisory_xact_lock")
+        );
+        expect(lockCallIndex).toBeGreaterThanOrEqual(0);
+
+        // 2. The lock was acquired BEFORE User.create. Jest's
+        //    invocationCallOrder is a monotonically-increasing number
+        //    assigned across all spies in a test, so a strict
+        //    lower-than relationship means strict before-then-after.
+        expect(createSpy.mock.invocationCallOrder.length).toBeGreaterThan(0);
+        const lockOrder = querySpy.mock.invocationCallOrder[lockCallIndex];
+        const firstCreateOrder = createSpy.mock.invocationCallOrder[0];
+        expect(lockOrder).toBeLessThan(firstCreateOrder);
+      } finally {
+        querySpy.mockRestore();
+        createSpy.mockRestore();
+      }
+    });
+
+    it("should 302 to /home and clear stale cookie when proxy identity changes", async () => {
+      // Repro: alice logged in (issued an accessToken JWT cookie), portal
+      // "log out of all apps" cleared oauth2-proxy + Cognito but not this
+      // app's cookie, bob then logged in. On refresh, the cookie carries
+      // alice's JWT while the X-Auth-Request-Email header says bob.
+      // Expect: 302 to /home + Set-Cookie clearing the stale accessToken
+      // and lastSignedIn cookies. Browser / fetch auto-follow the
+      // redirect with the cookies cleared, landing on the ForwardAuth
+      // fwd: path that issues a fresh JWT for bob — no 401 surfaces to
+      // the SPA, no "no access to this doc" toast, no manual reload.
+      const team = await buildTeam();
+      const alice = await buildUser({ teamId: team.id });
+      const bob = await buildUser({ teamId: team.id });
+      const state = {} as DefaultState;
+      const authMiddleware = auth();
+
+      let err: any;
+
+      const aliceJwt = alice.getJwtToken();
+
+      try {
+        await authMiddleware(
+          {
+            // @ts-expect-error mock request
+            request: {
+              get: jest.fn((header: string) => {
+                if (header === "x-auth-request-email") {
+                  return bob.email!;
+                }
+                return "";
+              }),
+            },
+            // @ts-expect-error mock cookies
+            cookies: {
+              get: jest.fn((key: string) => {
+                if (key === "accessToken") {
+                  return aliceJwt;
+                }
+                return undefined;
+              }),
+            },
+            state,
+            ip: "127.0.0.1",
+            cache: {},
+          },
+          jest.fn()
+        );
+      } catch (e) {
+        err = e;
+      }
+
+      expect(err).toBeDefined();
+      expect(err.status).toBe(302);
+      expect(err.headers?.Location).toBe("/home");
+      expect(err.headers?.["set-cookie"]).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("accessToken="),
+          expect.stringContaining("lastSignedIn="),
+        ])
+      );
+    });
+
+    it("should NOT clear cookie when proxy email matches JWT user", async () => {
+      // Steady-state: the same user as the JWT cookie. Header presence
+      // should not cause a forced re-auth.
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const state = {} as DefaultState;
+      const authMiddleware = auth();
+      const userJwt = user.getJwtToken();
+
+      await authMiddleware(
+        {
+          // @ts-expect-error mock request
+          request: {
+            get: jest.fn((header: string) => {
+              if (header === "x-auth-request-email") {
+                return user.email!;
+              }
+              return "";
+            }),
+          },
+          // @ts-expect-error mock cookies
+          cookies: {
+            get: jest.fn((key: string) => {
+              if (key === "accessToken") {
+                return userJwt;
+              }
+              return undefined;
+            }),
+            set: jest.fn(),
+          },
+          state,
+          ip: "127.0.0.1",
+          cache: {},
+        },
+        jest.fn()
+      );
+
+      expect(state.auth.user.id).toEqual(user.id);
+    });
+
+    it("should treat case- and whitespace-variant proxy email as matching the JWT user", async () => {
+      // Regression guard for normalizeProxyEmail: oauth2-proxy may forward
+      // a header value with different case or surrounding whitespace than
+      // the lowercase canonical user.email stored at registration time.
+      // The mismatch check must normalise both sides before comparing,
+      // otherwise the steady-state path silently kicks every cookie-authed
+      // request back to ForwardAuth on case-variant headers.
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const state = {} as DefaultState;
+      const authMiddleware = auth();
+      const userJwt = user.getJwtToken();
+      // user.email is canonical lowercase; header is uppercase + whitespace-padded.
+      const variantHeader = `  ${user.email!.toUpperCase()}  `;
+
+      await authMiddleware(
+        {
+          // @ts-expect-error mock request
+          request: {
+            get: jest.fn((header: string) => {
+              if (header === "x-auth-request-email") {
+                return variantHeader;
+              }
+              return "";
+            }),
+          },
+          // @ts-expect-error mock cookies
+          cookies: {
+            get: jest.fn((key: string) => {
+              if (key === "accessToken") {
+                return userJwt;
+              }
+              return undefined;
+            }),
+            set: jest.fn(),
+          },
+          state,
+          ip: "127.0.0.1",
+          cache: {},
+        },
+        jest.fn()
+      );
+
+      // No 401 thrown, no cookie cleared — request is authenticated as
+      // the same user the JWT carries.
+      expect(state.auth.user.id).toEqual(user.id);
     });
 
     it("should not honour ForwardAuth headers when AUTH_TYPE is not SSO", async () => {

@@ -29,6 +29,25 @@ export function InvalidAuthenticationError(
   });
 }
 
+/**
+ * Returned by the auth middleware when a cookie-transported session is
+ * stale (proxy identity no longer matches the JWT user). Carries status
+ * 302 and a `redirectTo` URL so the outer catch block in auth() can set
+ * up a Location header instead of surfacing a 401 to the SPA.
+ *
+ * Auto-follow semantics make this transparent for GET requests: the
+ * browser / fetch re-issues to `redirectTo` with the just-cleared cookie
+ * gone, which lands on the ForwardAuth `fwd:` header path and gets a
+ * fresh JWT for the new upstream user. No 401 reaches the frontend.
+ */
+export function StaleSessionRedirect(redirectTo: string) {
+  return httpErrors(302, "Stale session — redirecting to re-authenticate", {
+    redirectTo,
+    id: "stale_session_redirect",
+    isReportable: false,
+  });
+}
+
 export function AuthorizationError(message = "Authorization error") {
   return httpErrors(403, message, {
     id: "authorization_error",
