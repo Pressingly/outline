@@ -262,8 +262,11 @@ export default class AuthStore extends Store<Team> {
         }
 
         if (consumePostSwitchRedirectHome()) {
-          window.location.replace(homePath());
-          return;
+          const targetPath = homePath();
+          if (window.location.pathname !== targetPath) {
+            window.location.replace(targetPath);
+            return;
+          }
         }
 
         // Update the user's timezone if it has changed
