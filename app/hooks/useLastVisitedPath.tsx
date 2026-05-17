@@ -31,6 +31,14 @@ export function useLastVisitedPath(): [string, (path: string) => void] {
 }
 
 /**
+ * Clear the remembered last visited path so the next login does not reuse a
+ * stale redirect from a previous user.
+ */
+export function clearLastVisitedPath(): void {
+  setPersistedState("lastVisitedPath", "/");
+}
+
+/**
  * Hook that automatically tracks the current path as the last visited path.
  * This uses a ref to track the previous path and updates localStorage directly
  * without using useEffect to avoid React Doctor warnings.

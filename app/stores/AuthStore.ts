@@ -9,11 +9,16 @@ import { getCookieDomain, parseDomain } from "@shared/utils/domains";
 import type RootStore from "~/stores/RootStore";
 import Team from "~/models/Team";
 import env from "~/env";
-import { setPostLoginPath } from "~/hooks/useLastVisitedPath";
+import { clearLastVisitedPath, setPostLoginPath } from "~/hooks/useLastVisitedPath";
 import { client } from "~/utils/ApiClient";
 import Desktop from "~/utils/Desktop";
 import { deleteAllDatabases } from "~/utils/developer";
 import Logger from "~/utils/Logger";
+import { homePath } from "~/utils/routeHelpers";
+import {
+  consumePostSwitchRedirectHome,
+  wipeAndReload,
+} from "~/utils/userContinuity";
 import isCloudHosted from "~/utils/isCloudHosted";
 import Store from "./base/Store";
 
@@ -201,6 +206,21 @@ export default class AuthStore extends Store<Team> {
       const res = await client.post("/auth.info", undefined, {
         credentials: "same-origin",
       });
+      // Stale-session fallback: if /auth.info came back without a
+      // parseable payload (e.g. the server bounced us to /home HTML
+      // and ApiClient's redirect detection didn't fire for some
+      // reason — SW intercept, missing response.redirected on some
+      // browser/network combos), wipe and reload before the invariant
+      // throws into the ErrorBoundary. This is belt-and-suspenders on
+      // top of ApiClient.fetch's primary detection; either path lands
+      // us on the same wipeAndReload helper which is idempotent.
+      if (env.AUTH_TYPE === "SSO" && !res?.data?.user) {
+        Logger.warn(
+          "/auth.info returned no user payload — assuming stale session"
+        );
+        await wipeAndReload();
+        return;
+      }
       invariant(res?.data, "Auth not available");
 
       runInAction("AuthStore#refresh", () => {
@@ -239,6 +259,14 @@ export default class AuthStore extends Store<Team> {
         ) {
           window.location.href = `${data.team.url}${pathname}`;
           return;
+        }
+
+        if (consumePostSwitchRedirectHome()) {
+          const targetPath = homePath();
+          if (window.location.pathname !== targetPath) {
+            window.location.replace(targetPath);
+            return;
+          }
         }
 
         // Update the user's timezone if it has changed
@@ -339,6 +367,8 @@ export default class AuthStore extends Store<Team> {
         Logger.error("Failed to delete authentication", err);
       }
     }
+
+    clearLastVisitedPath();
 
     // remove session record on apex cookie
     const team = this.team;

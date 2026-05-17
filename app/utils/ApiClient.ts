@@ -26,6 +26,7 @@ import {
 import { getCookie } from "tiny-cookie";
 import { CSRF } from "@shared/constants";
 import AuthenticationHelper from "@shared/helpers/AuthenticationHelper";
+import { wipeAndReload } from "./userContinuity";
 
 type Options = {
   baseUrl?: string;
@@ -163,6 +164,67 @@ class ApiClient {
 
     const timeEnd = window.performance.now();
     const success = response.status >= 200 && response.status < 300;
+
+    // Stale-session redirect detection. Outline's auth middleware only
+    // runs on /api/* routes — so on a user switch, the SPA HTML at /
+    // is served WITHOUT the middleware noticing the cookie/header
+    // mismatch. The mismatch is only detected on the first /api call
+    // after boot (typically auth.info). The server responds with 302
+    // + Set-Cookie clearing accessToken + Location: /home. Fetch
+    // auto-follows (redirect: "follow"), lands on /home which serves
+    // HTML — so `response.redirected` is true and `response.url`
+    // points at /home (or some other non-/api path).
+    //
+    // Without this hook the SPA keeps showing the previous user's
+    // data from the rehydrated AUTH_STORE until a full hard nav
+    // triggers checkUserContinuity. Symptom: bottom-left avatar
+    // shows the previous user immediately after a user switch.
+    //
+    // We trigger the same wipe checkUserContinuity does, then
+    // hard-navigate to /home so the SPA re-mounts on a clean slate
+    // (localStorage empty → fresh AuthStore → fresh fetchAuth →
+    // correct user).
+    //
+    // Only trigger in SSO mode where the redirect is part of the
+    // expected stale-session flow. In non-SSO deployments, any
+    // /api redirect is unexpected and shouldn't trigger a wipe.
+    //
+    // Detection signals (any of):
+    //   - response.redirected is true and final URL is not under /api
+    //     (definitive: fetch followed at least one redirect off the
+    //     /api namespace)
+    //   - Content-Type is text/html for an /api request (the SPA
+    //     HTML fallback handler caught it — happens when the redirect
+    //     target served HTML, or when some intermediary stripped the
+    //     302 and returned HTML directly)
+    //
+    // Either signal is sufficient. Both can be true together but only
+    // the first qualifying detection matters since wipeAndReload is
+    // idempotent.
+    if (env.AUTH_TYPE === "SSO") {
+      const contentType = response.headers.get("content-type") || "";
+      const finalUrlOffApi = !response.url.includes("/api/");
+      const wasRedirected = response.redirected && finalUrlOffApi;
+      // Only treat HTML-on-API as a stale-session signal when the
+      // response is a SUCCESS (the 302→/home bounce ends up as 200
+      // HTML after fetch follows). A 502/503/4xx HTML error page —
+      // Traefik gateway error, oauth2-proxy expiry redirect, etc. —
+      // means the user has to re-auth via the normal channels but
+      // their browser-local state should NOT be wiped on a transient
+      // infrastructure hiccup. Gating on `success` keeps the wipe
+      // tightly scoped to the actual stale-session flow.
+      const gotHtmlOnApiCall = success && contentType.includes("text/html");
+      if (wasRedirected || gotHtmlOnApiCall) {
+        Logger.info("lifecycle", "Stale-session redirect detected", {
+          redirected: response.redirected,
+          finalUrl: response.url,
+          contentType,
+          status: response.status,
+        });
+        await wipeAndReload();
+        throw new AuthorizationError();
+      }
+    }
 
     if (options.download && success) {
       const blob = await response.blob();

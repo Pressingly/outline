@@ -22,11 +22,15 @@ import { getUserForJWT } from "@server/utils/jwt";
 import {
   AuthenticationError,
   AuthorizationError,
+  StaleSessionRedirect,
   UserSuspendedError,
 } from "../errors";
 
 /** Service identifier used by the ForwardAuth authentication flow. */
 export const FORWARDAUTH_SERVICE = "forwardauth";
+
+/** The {@link env.AUTH_TYPE} value that activates ForwardAuth/SSO mode. */
+const AUTH_TYPE_SSO = "SSO";
 
 type AuthenticationOptions = {
   /** Role required to access the route. */
@@ -92,6 +96,31 @@ export default function auth(options: AuthenticationOptions = {}) {
         );
       }
     } catch (err) {
+      const epoch = "Thu, 01 Jan 1970 00:00:00 GMT";
+
+      // Stale-session redirect. Convert into a 302 with Location
+      // pointing to /home, plus Set-Cookie headers expiring the stale
+      // accessToken + lastSignedIn cookies. Browser / fetch auto-
+      // follow the redirect with the cleared cookies, which lands on
+      // the ForwardAuth `fwd:` header path and issues a fresh JWT —
+      // no 401 surfaces to the SPA.
+      //
+      // err.headers is the only way to carry Set-Cookie + Location
+      // through Koa's onerror handler (see Koa's context.js:139-146 —
+      // response headers are stripped on error, then only err.headers
+      // are re-applied).
+      if (err.status === 302 && err.redirectTo) {
+        err.headers = {
+          ...err.headers,
+          "set-cookie": [
+            `accessToken=; expires=${epoch}; path=/`,
+            `lastSignedIn=; expires=${epoch}; path=/`,
+          ],
+          Location: err.redirectTo,
+        };
+        throw err;
+      }
+
       // If a cookie-transported JWT caused the 401, clear it so the browser
       // stops sending it. On the next request ForwardAuth headers take over
       // and a fresh session is issued. Only clear when the cookie was the
@@ -108,7 +137,6 @@ export default function auth(options: AuthenticationOptions = {}) {
         !ctx.request.get("authorization") &&
         ctx.cookies.get("accessToken")
       ) {
-        const epoch = "Thu, 01 Jan 1970 00:00:00 GMT";
         err.headers = {
           ...err.headers,
           "set-cookie": [
@@ -183,7 +211,7 @@ export function parseAuthentication(ctx: AppContext): AuthInput {
   // credentials — so an existing session cookie (or Bearer token) is always
   // preferred. This means once the JWT cookie has been issued the header path
   // is bypassed entirely, avoiding a DB round-trip on every request.
-  if (env.AUTH_TYPE === "SSO") {
+  if (env.AUTH_TYPE === AUTH_TYPE_SSO) {
     const authRequestEmail = ctx.request.get("x-auth-request-email");
     if (authRequestEmail) {
       return {
@@ -197,6 +225,39 @@ export function parseAuthentication(ctx: AppContext): AuthInput {
     token: undefined,
     transport: undefined,
   };
+}
+
+/**
+ * Normalises a raw `x-auth-request-email` header value into the canonical
+ * email used for User lookup.
+ *
+ * - Lowercased and whitespace-trimmed.
+ * - If it doesn't pass the email-shape regex (e.g. oauth2-proxy is forwarding
+ *   a bare username like a numeric Cognito ID), synthesise
+ *   `<local>@${env.DEFAULT_EMAIL_DOMAIN}` so the resulting key is the same
+ *   one the User row was created under.
+ *
+ * Kept in sync with the synthesis logic in the `fwd:` branch of
+ * `validateAuthentication` and reused by the stale-session mismatch check.
+ */
+function normalizeProxyEmail(raw: string): string {
+  const trimmed = raw.toLowerCase().trim();
+  // Use indexOf instead of a regex to avoid polynomial backtracking on
+  // uncontrolled input while preserving the original regex's semantics:
+  // (a) local part exists, (b) exactly one "@", (c) at least one char
+  // between "@" and the dot, and (d) at least one char after the dot.
+  // Embedded whitespace is also rejected (matching [^\s@]+ behaviour).
+  const atIdx = trimmed.indexOf("@");
+  const dotIdx = trimmed.indexOf(".", atIdx + 1);
+  const isEmailShaped =
+    atIdx > 0 &&
+    trimmed.indexOf("@", atIdx + 1) === -1 &&
+    !/\s/.test(trimmed) &&
+    dotIdx > atIdx + 1 &&
+    dotIdx < trimmed.length - 1;
+  return isEmailShaped
+    ? trimmed
+    : `${trimmed.split("@")[0]}@${env.DEFAULT_EMAIL_DOMAIN}`;
 }
 
 async function validateAuthentication(
@@ -308,31 +369,60 @@ async function validateAuthentication(
 
     scope = apiKey.scope ?? ["*"];
     await apiKey.updateActiveAt();
-  } else if (token.startsWith("fwd:") && env.AUTH_TYPE === "SSO") {
+  } else if (token.startsWith("fwd:") && env.AUTH_TYPE === AUTH_TYPE_SSO) {
     type = AuthenticationType.APP;
     service = FORWARDAUTH_SERVICE;
 
-    const emailClaim = token.slice(4).toLowerCase().trim();
-    const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailClaim);
-    const email = isValidEmail
-      ? emailClaim
-      : `${emailClaim.split("@")[0]}@${env.DEFAULT_EMAIL_DOMAIN}`;
-    const localPart = emailClaim.split("@")[0];
+    const email = normalizeProxyEmail(token.slice(4));
+    const localPart = email.split("@")[0];
     const displayName = ctx.request.get("x-auth-request-user") || localPart;
     const { domain } = parseEmail(email);
 
-    // Exact match on the canonical lowercased email — never LIKE. Using LIKE
-    // here would let SQL wildcard metacharacters (%, _) in the supplied value
-    // match arbitrary users (e.g. "%@%.%" matches the first row, often the
-    // bootstrap admin).
-    user = await User.scope("withTeam").findOne({
-      where: { email },
-    });
+    // Concurrent-creation race guard. The SPA on first-ever login fires
+    // multiple parallel API requests (docs, team, access tokens, …) with
+    // no accessToken cookie set yet — so every request takes the `fwd:`
+    // header path, every request hits the find-then-create below, and
+    // before the row is committed the others have already passed the
+    // findOne miss. Without a serialisation point, N parallel requests
+    // create N duplicate rows for the same email.
+    //
+    // Outline's User table intentionally does NOT have a unique constraint
+    // on email (server/migrations/20170712055148-non-unique-email.js
+    // removed it to support the same email across multiple teams). So
+    // ON CONFLICT can't save us at the DB level; we serialise the
+    // find+create on a Postgres advisory lock keyed by the email hash.
+    // Advisory locks are per-session, transaction-scoped here, and have
+    // no schema cost. Different emails take different lock keys so
+    // concurrent first-logins for distinct users don't contend.
+    user = await sequelize.transaction(async (transaction) => {
+      // pg_advisory_xact_lock takes a bigint; hash the email to a stable
+      // 64-bit signed int. hashtext is built-in to Postgres and returns
+      // an int4 — widen to bigint to feed the function's bigint overload.
+      await sequelize.query(
+        "SELECT pg_advisory_xact_lock(hashtext($email)::bigint)",
+        { bind: { email }, transaction }
+      );
 
-    if (!user) {
-      // Self-hosted deployments have a single team. When none exists yet the
-      // first arriving user bootstraps the installation.
-      let team = await Team.findOne();
+      // Re-check inside the lock. If another concurrent request beat us
+      // to the create, we'll see its row here and skip provisioning.
+      // Exact match on the canonical lowercased email — never LIKE.
+      // Using LIKE here would let SQL wildcard metacharacters (%, _) in
+      // the supplied value match arbitrary users (e.g. "%@%.%" matches
+      // the first row, often the bootstrap admin).
+      let existing = await User.scope("withTeam").findOne({
+        where: { email },
+        transaction,
+      });
+
+      if (existing) {
+        return existing;
+      }
+
+      // Self-hosted deployments have a single team. When none exists yet
+      // the first arriving user bootstraps the installation. Team
+      // provisioning happens inside this same transaction so the lock
+      // also serialises the team bootstrap path.
+      let team = await Team.findOne({ transaction });
       let isNewTeam = false;
 
       if (!team) {
@@ -340,44 +430,100 @@ async function validateAuthentication(
           domain,
         });
         const subdomain = slugifyDomain(domain ?? "team");
-        team = await sequelize.transaction((transaction) =>
-          teamCreator(createContext({ ip: ctx.ip, transaction }), {
-            name: env.APP_NAME,
-            subdomain,
-            authenticationProviders: [
-              {
-                name: FORWARDAUTH_SERVICE,
-                providerId: domain ?? FORWARDAUTH_SERVICE,
-              },
-            ],
-          })
-        );
+        team = await teamCreator(createContext({ ip: ctx.ip, transaction }), {
+          name: env.APP_NAME,
+          subdomain,
+          authenticationProviders: [
+            {
+              name: FORWARDAUTH_SERVICE,
+              providerId: domain ?? FORWARDAUTH_SERVICE,
+            },
+          ],
+        });
         isNewTeam = true;
       }
 
       Logger.info("authentication", "Provisioning new user via ForwardAuth", {
         email,
       });
-      const created = await User.create({
-        name: displayName,
-        email,
-        teamId: team.id,
-        // First user into a brand-new team becomes admin.
-        role: isNewTeam ? UserRole.Admin : team.defaultUserRole,
-        lastActiveAt: new Date(),
-        lastActiveIp: ctx.ip,
-      });
+      const created = await User.create(
+        {
+          name: displayName,
+          email,
+          teamId: team.id,
+          // First user into a brand-new team becomes admin.
+          role: isNewTeam ? UserRole.Admin : team.defaultUserRole,
+          lastActiveAt: new Date(),
+          lastActiveIp: ctx.ip,
+        },
+        { transaction }
+      );
+
       // Reload with associations so downstream middleware sees a full User.
-      user = await User.scope("withTeam").findByPk(created.id);
-      if (!user) {
+      const full = await User.scope("withTeam").findByPk(created.id, {
+        transaction,
+      });
+      if (!full) {
         throw AuthenticationError("Failed to provision ForwardAuth user");
       }
-    }
+      return full;
+    });
   } else {
     type = AuthenticationType.APP;
     const result = await getUserForJWT(token);
     user = result.user;
     service = result.service;
+
+    // SSO stale-session detection: if oauth2-proxy is asserting a different
+    // identity than what's in this JWT cookie, the cookie is stale. Typical
+    // repro: portal "log out of all apps" clears the shared _oauth2_proxy
+    // cookie + Cognito session but NOT Outline's accessToken cookie on its
+    // own subdomain; a different user then logs in. Without this check we'd
+    // keep serving the previous user from the cookie JWT.
+    //
+    // Throwing 401 here triggers the cookie-cleanup branch in the outer
+    // auth() catch block: the accessToken + lastSignedIn cookies are
+    // expired via err.headers, and the client's next request takes the
+    // ForwardAuth header path → new JWT for the new user.
+    if (env.AUTH_TYPE === AUTH_TYPE_SSO && transport === "cookie") {
+      const headerRaw = ctx.request.get("x-auth-request-email");
+      // Bidirectional normalisation: both sides MUST be lowercased AND
+      // whitespace-trimmed before comparison. Asymmetric normalisation
+      // (e.g. trimming the header but not user.email) is observationally
+      // equivalent to no normalisation — any whitespace-padded value in
+      // the DB (legacy rows, fixtures, non-proxy provisioning paths) would
+      // spuriously trigger 401 → cookie clear → re-auth loops on every
+      // request. Required by openspec/specs/proxy-auth-middleware/spec.md
+      // "Match is case- and whitespace-insensitive".
+      //
+      // Header absence is NOT treated as stale here — per the same spec
+      // ("Header absence is NOT a logout signal"), absent header means
+      // internal / non-proxy paths (background jobs, OPTIONS preflight,
+      // direct backend hits) that legitimately carry the cookie. Treating
+      // it as logout would break those.
+      if (
+        headerRaw &&
+        normalizeProxyEmail(headerRaw) !==
+          (user.email ?? "").toLowerCase().trim()
+      ) {
+        // Redirect to /home (302) with the stale cookie cleared. The
+        // browser / fetch auto-follow the redirect, which lands on
+        // Outline's home — by then the cookie is gone, ForwardAuth
+        // adds the new user's X-Auth-Request-Email header, and the
+        // fwd: path issues a fresh JWT. No 401 surfaces to the SPA,
+        // no "no access to this doc" toast, no manual reload.
+        //
+        // We deliberately do NOT redirect to ctx.originalUrl:
+        //   - The previous user may have had access to a doc the new
+        //     user can't see → retry would 404/403, equally confusing.
+        //   - For XHR fetches expecting JSON, /home returns HTML; the
+        //     SPA's mismatch handler will route to /home cleanly while
+        //     a same-URL retry of an inaccessible doc would error.
+        // /home is a known-good landing page for any authenticated
+        // user.
+        throw StaleSessionRedirect("/home");
+      }
+    }
   }
 
   if (user.isSuspended) {
