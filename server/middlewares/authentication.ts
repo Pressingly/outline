@@ -375,7 +375,6 @@ async function validateAuthentication(
 
     const email = normalizeProxyEmail(token.slice(4));
     const localPart = email.split("@")[0];
-    const displayName = ctx.request.get("x-auth-request-user") || localPart;
     const { domain } = parseEmail(email);
 
     // Concurrent-creation race guard. The SPA on first-ever login fires
@@ -448,7 +447,7 @@ async function validateAuthentication(
       });
       const created = await User.create(
         {
-          name: displayName,
+          name: localPart,
           email,
           teamId: team.id,
           // First user into a brand-new team becomes admin.

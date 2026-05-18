@@ -520,10 +520,11 @@ export class Environment {
 
   /**
    * The authentication type to use. When set to "SSO", the server will trust
-   * X-Auth-Request-Email and X-Auth-Request-User headers injected by a reverse
-   * proxy (e.g. oauth2-proxy, Authelia) for authentication and automatic user
-   * provisioning. Only enable this when Outline is deployed behind a trusted
-   * authenticating proxy on a self-hosted instance.
+   * the X-Auth-Request-Email header injected by a reverse proxy
+   * (e.g. oauth2-proxy, Authelia) for authentication and automatic user
+   * provisioning. The display name is derived from the email local-part.
+   * Only enable this when Outline is deployed behind a trusted authenticating
+   * proxy on a self-hosted instance.
    */
   @Public
   @IsOptional()

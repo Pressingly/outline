@@ -436,9 +436,6 @@ describe("Authentication middleware", () => {
               if (header === "x-auth-request-email") {
                 return newEmail;
               }
-              if (header === "x-auth-request-user") {
-                return "New User";
-              }
               return "";
             }),
           },
@@ -455,36 +452,6 @@ describe("Authentication middleware", () => {
         where: { email: newEmail.toLowerCase() },
       });
       expect(provisioned).not.toBeNull();
-      expect(state.auth.user.email).toEqual(newEmail.toLowerCase());
-      expect(state.auth.user.name).toEqual("New User");
-    });
-
-    it("should use email prefix as name when X-Auth-Request-User is absent", async () => {
-      await buildTeam();
-      const state = {} as DefaultState;
-      const authMiddleware = auth();
-      const newEmail = `prefix-${randomString(6)}@example.com`;
-
-      await authMiddleware(
-        {
-          // @ts-expect-error mock request
-          request: {
-            get: jest.fn((header: string) => {
-              if (header === "x-auth-request-email") {
-                return newEmail;
-              }
-              return "";
-            }),
-          },
-          // @ts-expect-error mock cookies
-          cookies: { get: jest.fn(() => undefined), set: jest.fn() },
-          state,
-          ip: "127.0.0.1",
-          cache: {},
-        },
-        jest.fn()
-      );
-
       expect(state.auth.user.email).toEqual(newEmail.toLowerCase());
       expect(state.auth.user.name).toEqual(
         newEmail.toLowerCase().split("@")[0]
