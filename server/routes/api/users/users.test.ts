@@ -1,5 +1,6 @@
 import { faker } from "@faker-js/faker";
 import { TeamPreference, UserRole } from "@shared/types";
+import env from "@server/env";
 import ConfirmUpdateEmail from "@server/emails/templates/ConfirmUpdateEmail";
 import { TeamDomain } from "@server/models";
 import {
@@ -645,6 +646,44 @@ describe("#users.delete", () => {
       },
     });
     expect(res.status).toEqual(200);
+  });
+
+  describe("when AUTH_TYPE is SSO", () => {
+    beforeEach(() => {
+      env.AUTH_TYPE = "SSO";
+    });
+
+    afterEach(() => {
+      env.AUTH_TYPE = undefined;
+    });
+
+    it("should not allow users to delete their own account", async () => {
+      const user = await buildUser();
+      await buildUser({
+        teamId: user.teamId,
+      });
+      const res = await server.post("/api/users.delete", {
+        body: {
+          code: user.deleteConfirmationCode,
+          token: user.getJwtToken(),
+        },
+      });
+      expect(res.status).toEqual(403);
+    });
+
+    it("should still allow admins to delete other users", async () => {
+      const admin = await buildAdmin();
+      const user = await buildUser({
+        teamId: admin.teamId,
+      });
+      const res = await server.post("/api/users.delete", {
+        body: {
+          id: user.id,
+          token: admin.getJwtToken(),
+        },
+      });
+      expect(res.status).toEqual(200);
+    });
   });
 
   it("should require authentication", async () => {

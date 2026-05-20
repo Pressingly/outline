@@ -1,4 +1,5 @@
 import { TeamPreference, EmailDisplay } from "@shared/types";
+import env from "@server/env";
 import { User, Team } from "@server/models";
 import { allow } from "./cancan";
 import {
@@ -68,7 +69,8 @@ allow(User, "delete", User, (actor, user) =>
     isTeamAdmin(actor, user),
     and(
       actor.id === user?.id,
-      !!actor.team.getPreference(TeamPreference.MembersCanDeleteAccount)
+      !!actor.team.getPreference(TeamPreference.MembersCanDeleteAccount),
+      env.AUTH_TYPE !== "SSO"
     )
   )
 );
