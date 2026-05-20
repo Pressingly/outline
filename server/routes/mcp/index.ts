@@ -10,25 +10,39 @@ import Logger from "@server/logging/Logger";
 import auth from "@server/middlewares/authentication";
 import { rateLimiter } from "@server/middlewares/rateLimiter";
 import requestTracer from "@server/middlewares/requestTracer";
+import { UserFlag } from "@server/models/User";
 import { AuthenticationType } from "@server/types";
 import { RateLimiterStrategy } from "@server/utils/RateLimiter";
+import { attachmentTools } from "@server/tools/attachments";
 import { collectionTools } from "@server/tools/collections";
 import { commentTools } from "@server/tools/comments";
 import { documentTools } from "@server/tools/documents";
+import { fetchTool } from "@server/tools/fetch";
 import { userTools } from "@server/tools/users";
 import { version } from "../../../package.json";
 
 const app = new Koa();
 const router = new Router();
 
+const defaultInstructions = `Document markdown content must not begin with a top-level heading (H1) — the title is stored as a separate field, so set it via the title parameter and start the content with body text or a lower-level heading instead.
+
+Document and collection markdown support @mentions using the syntax: @[Display Name](mention://user/userId). For example: @[John Doe](mention://user/c9a1b2e3-...). Use the "list_users" tool to find user IDs.
+
+Read images and attachments with the "fetch" tool by setting resource to "attachment" and passing either the attachment ID or an /api/attachments.redirect?id=... URL; the tool will return a signed URL for download.`;
+
 /**
- * Creates a fresh MCP server instance with tools and resources filtered by
- * the OAuth scopes granted to the current token.
+ * Creates a fresh MCP server instance with tools filtered by the OAuth
+ * scopes granted to the current token.
  *
  * @param scopes - the OAuth scopes granted to the access token.
+ * @param guidance - optional workspace guidance to append to default instructions.
  * @returns a configured McpServer ready to be connected to a transport.
  */
-function createMcpServer(scopes: string[]): McpServer {
+function createMcpServer(scopes: string[], guidance?: string): McpServer {
+  const instructions = guidance
+    ? `${defaultInstructions}\n\n${guidance}`
+    : defaultInstructions;
+
   const server = new McpServer(
     {
       name: "outline",
@@ -36,15 +50,17 @@ function createMcpServer(scopes: string[]): McpServer {
     },
     {
       capabilities: {
-        resources: {},
         tools: {},
       },
+      instructions,
     }
   );
 
+  attachmentTools(server, scopes);
   collectionTools(server, scopes);
   commentTools(server, scopes);
   documentTools(server, scopes);
+  fetchTool(server, scopes);
   userTools(server, scopes);
 
   return server;
@@ -67,13 +83,22 @@ router.post(
       throw NotFoundError();
     }
 
-    const server = createMcpServer(scope ?? []);
+    user.setFlag(UserFlag.MCP);
+    await user.save({ hooks: false });
+
+    const server = createMcpServer(
+      scope ?? [],
+      user.team.guidanceMCP ?? undefined
+    );
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });
 
+    // onerror fires for client-side 4xx conditions (bad Accept header, etc)
+    // which the transport already answers with an HTTP error — warn keeps
+    // visibility without reporting client mistakes to Sentry.
     transport.onerror = (error) => {
-      Logger.error("MCP transport error", error);
+      Logger.warn("MCP transport error", error);
     };
 
     await server.connect(transport);

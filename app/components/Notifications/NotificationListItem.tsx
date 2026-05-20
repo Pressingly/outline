@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import styled from "styled-components";
 import { s, hover, truncateMultiline } from "@shared/styles";
+import { NotificationEventType } from "@shared/types";
 import type Notification from "~/models/Notification";
 import useStores from "~/hooks/useStores";
 import { Avatar, AvatarSize, AvatarVariant } from "../Avatar";
@@ -21,6 +22,7 @@ import {
   notificationArchive,
 } from "~/actions/definitions/notifications";
 import { NotificationSection } from "~/actions/sections";
+import AccessRequestActions from "./AccessRequestActions";
 
 const CommentEditor = lazyWithRetry(
   () => import("~/scenes/Document/components/Comments/CommentEditor")
@@ -36,6 +38,10 @@ function NotificationListItem({ notification, onNavigate }: Props) {
   const { collections } = useStores();
   const collectionId = notification.document?.collectionId;
   const collection = collectionId ? collections.get(collectionId) : undefined;
+
+  const isAccessRequestPending =
+    notification.event === NotificationEventType.RequestDocumentAccess &&
+    notification.accessRequestStatus === "pending";
 
   const handleClick: React.MouseEventHandler<HTMLAnchorElement> = (event) => {
     if (event.altKey) {
@@ -86,6 +92,9 @@ function NotificationListItem({ notification, onNavigate }: Props) {
                 defaultValue={toJS(notification.comment.data)}
               />
             )}
+            {isAccessRequestPending && (
+              <AccessRequestActions notification={notification} />
+            )}
           </Flex>
           {notification.viewedAt ? null : <UnreadBadge />}
         </Container>
@@ -117,11 +126,12 @@ const StyledAvatar = styled(Avatar).attrs({
 
 const Container = styled(Flex)<{ $unread: boolean }>`
   position: relative;
-  padding: 8px 12px;
-  padding-right: 40px;
+  padding-block: 8px;
+  padding-inline: 12px 40px;
   border-radius: 4px;
 
   ${StyledLink}[data-state=open] &,
+  &:has([data-state="open"]),
   &:${hover},
   &:active {
     background: ${s("listItemHoverBackground")};

@@ -56,12 +56,12 @@ describe("Authentication middleware", () => {
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn(() => `Bearer ${user.getJwtToken()}`),
+            get: vi.fn(() => `Bearer ${user.getJwtToken()}`),
           },
           state,
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
       expect(state.auth.user.id).toEqual(user.id);
     });
@@ -76,12 +76,12 @@ describe("Authentication middleware", () => {
           {
             // @ts-expect-error mock request
             request: {
-              get: jest.fn(() => `Bearer ${user.getJwtToken()}error`),
+              get: vi.fn(() => `Bearer ${user.getJwtToken()}error`),
             },
             state,
             cache: {},
           },
-          jest.fn()
+          vi.fn()
         );
       } catch (e) {
         expect(e.message).toBe("Invalid token");
@@ -100,12 +100,12 @@ describe("Authentication middleware", () => {
           {
             // @ts-expect-error mock request
             request: {
-              get: jest.fn(() => `Bearer ${user.getJwtToken()}`),
+              get: vi.fn(() => `Bearer ${user.getJwtToken()}`),
             },
             state,
             cache: {},
           },
-          jest.fn()
+          vi.fn()
         );
       } catch (e) {
         expect(e.message).toBe("Invalid authentication type");
@@ -123,15 +123,71 @@ describe("Authentication middleware", () => {
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn(() => `Bearer ${key.value}`),
+            get: vi.fn(() => `Bearer ${key.value}`),
           },
           state,
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
       expect(state.auth.user.id).toEqual(user.id);
     });
+    it("should authenticate with global read scope on read endpoints", async () => {
+      const state = {} as DefaultState;
+      const user = await buildUser();
+      const authMiddleware = auth();
+      const key = await buildApiKey({
+        userId: user.id,
+        scope: [Scope.Read],
+      });
+
+      await authMiddleware(
+        {
+          originalUrl: "/api/auth.info",
+          // @ts-expect-error mock request
+          request: {
+            url: "/auth.info",
+            get: vi.fn(() => `Bearer ${key.value}`),
+          },
+          state,
+          cache: {},
+        },
+        vi.fn()
+      );
+      expect(state.auth.user.id).toEqual(user.id);
+    });
+
+    it("should return 403 authorization error when scope does not match", async () => {
+      const state = {} as DefaultState;
+      const user = await buildUser();
+      const authMiddleware = auth();
+      const key = await buildApiKey({
+        userId: user.id,
+        scope: [Scope.Read],
+      });
+
+      try {
+        await authMiddleware(
+          {
+            originalUrl: "/api/documents.create",
+            // @ts-expect-error mock request
+            request: {
+              url: "/documents.create",
+              get: vi.fn(() => `Bearer ${key.value}`),
+            },
+            state,
+            cache: {},
+          },
+          vi.fn()
+        );
+        throw new Error("Expected error to be thrown");
+      } catch (e) {
+        expect(e.status).toBe(403);
+        expect(e.id).toBe("authorization_error");
+        expect(e.message).toContain("does not have access to this resource");
+      }
+    });
+
     it("should return error with invalid API key", async () => {
       const state = {} as DefaultState;
       const authMiddleware = auth();
@@ -141,12 +197,12 @@ describe("Authentication middleware", () => {
           {
             // @ts-expect-error mock request
             request: {
-              get: jest.fn(() => `Bearer ${randomString(38)}`),
+              get: vi.fn(() => `Bearer ${randomString(38)}`),
             },
             state,
             cache: {},
           },
-          jest.fn()
+          vi.fn()
         );
       } catch (e) {
         expect(e.message).toBe("Invalid API key");
@@ -170,12 +226,12 @@ describe("Authentication middleware", () => {
           // @ts-expect-error mock request
           request: {
             url: "/users.info",
-            get: jest.fn(() => `Bearer ${authentication.accessToken}`),
+            get: vi.fn(() => `Bearer ${authentication.accessToken}`),
           },
           state,
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
       expect(state.auth.user.id).toEqual(user.id);
     });
@@ -196,12 +252,12 @@ describe("Authentication middleware", () => {
             // @ts-expect-error mock request
             request: {
               url: "/documents.create",
-              get: jest.fn(() => `Bearer ${authentication.accessToken}`),
+              get: vi.fn(() => `Bearer ${authentication.accessToken}`),
             },
             state,
             cache: {},
           },
-          jest.fn()
+          vi.fn()
         );
       } catch (e) {
         expect(e.message).toContain("does not have access to this resource");
@@ -216,21 +272,25 @@ describe("Authentication middleware", () => {
         scope: [Scope.Read],
       });
 
-      const ctx: any = createCtx({
-        originalUrl: "/api/users.info",
-        request: {
-          body: {
-            token: authentication.accessToken,
-          },
-        },
-      });
-
-      const authMiddleware = auth();
-
       let error: any;
 
       try {
-        await authMiddleware(ctx, jest.fn());
+        await authMiddleware(
+          {
+            originalUrl: "/api/users.info",
+            request: {
+              url: "/users.info",
+              // @ts-expect-error mock request
+              get: vi.fn(() => null),
+              body: {
+                token: authentication.accessToken,
+              },
+            },
+            state,
+            cache: {},
+          },
+          vi.fn()
+        );
         throw new Error("Expected middleware to throw");
       } catch (e: any) {
         error = e;
@@ -253,12 +313,12 @@ describe("Authentication middleware", () => {
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn(() => "error"),
+            get: vi.fn(() => "error"),
           },
           state,
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
     } catch (e) {
       expect(e.message).toBe(
@@ -275,7 +335,7 @@ describe("Authentication middleware", () => {
       {
         request: {
           // @ts-expect-error mock request
-          get: jest.fn(() => null),
+          get: vi.fn(() => null),
           query: {
             token: user.getJwtToken(),
           },
@@ -283,7 +343,7 @@ describe("Authentication middleware", () => {
         state,
         cache: {},
       },
-      jest.fn()
+      vi.fn()
     );
     expect(state.auth.user.id).toEqual(user.id);
   });
@@ -296,7 +356,7 @@ describe("Authentication middleware", () => {
       {
         request: {
           // @ts-expect-error mock request
-          get: jest.fn(() => null),
+          get: vi.fn(() => null),
           body: {
             token: user.getJwtToken(),
           },
@@ -304,7 +364,7 @@ describe("Authentication middleware", () => {
         state,
         cache: {},
       },
-      jest.fn()
+      vi.fn()
     );
     expect(state.auth.user.id).toEqual(user.id);
   });
@@ -324,12 +384,12 @@ describe("Authentication middleware", () => {
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn(() => `Bearer ${user.getJwtToken()}`),
+            get: vi.fn(() => `Bearer ${user.getJwtToken()}`),
           },
           state,
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
     } catch (err) {
       error = err;
@@ -825,12 +885,12 @@ describe("Authentication middleware", () => {
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn(() => `Bearer ${user.getJwtToken()}`),
+            get: vi.fn(() => `Bearer ${user.getJwtToken()}`),
           },
           state,
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
     } catch (err) {
       error = err;

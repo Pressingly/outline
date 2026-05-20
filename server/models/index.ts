@@ -16,6 +16,8 @@ export { default as Comment } from "./Comment";
 
 export { default as Document } from "./Document";
 
+export { default as DocumentInsight } from "./DocumentInsight";
+
 export { default as Event } from "./Event";
 
 export { default as ExternalGroup } from "./ExternalGroup";
@@ -52,6 +54,8 @@ export { default as SearchQuery } from "./SearchQuery";
 
 export { default as Share } from "./Share";
 
+export { default as ShareSubscription } from "./ShareSubscription";
+
 export { default as Star } from "./Star";
 
 export { default as Team } from "./Team";
@@ -74,3 +78,5 @@ export { default as Subscription } from "./Subscription";
 
 export { default as Emoji } from "./Emoji";
 export { default as UserPasskey } from "./UserPasskey";
+
+export { default as AccessRequest } from "./AccessRequest";

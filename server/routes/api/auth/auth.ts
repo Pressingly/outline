@@ -1,6 +1,6 @@
 import { subHours, subMinutes } from "date-fns";
 import Router from "koa-router";
-import uniqBy from "lodash/uniqBy";
+import { uniqBy } from "es-toolkit/compat";
 import { TeamPreference } from "@shared/types";
 import { parseDomain } from "@shared/utils/domains";
 import env from "@server/env";
@@ -22,6 +22,7 @@ import {
 import ValidateSSOAccessTask from "@server/queues/tasks/ValidateSSOAccessTask";
 import type { APIContext } from "@server/types";
 import { getSessionsInCookie } from "@server/utils/authentication";
+import RateLimiter from "@server/utils/RateLimiter";
 import type * as T from "./schema";
 
 const router = new Router();
@@ -57,7 +58,7 @@ router.post("auth.config", async (ctx: APIContext<T.AuthConfigReq>) => {
   if (domain.custom) {
     const team = await Team.scope("withAuthenticationProviders").findOne({
       where: {
-        domain: ctx.request.hostname,
+        domain: ctx.request.hostname.toLowerCase(),
       },
     });
 
@@ -190,7 +191,7 @@ router.post(
   transaction(),
   async (ctx: APIContext<T.AuthDeleteReq>) => {
     const { auth, transaction } = ctx.state;
-    const { user } = auth;
+    const { user, token } = auth;
 
     await user.rotateJwtSecret({ transaction });
     await Event.createFromContext(ctx, {
@@ -200,6 +201,8 @@ router.post(
         name: user.name,
       },
     });
+
+    void RateLimiter.clearCachedToken(token);
 
     ctx.cookies.set("accessToken", "", {
       sameSite: "lax",

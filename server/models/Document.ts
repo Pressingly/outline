@@ -1,7 +1,5 @@
 /* oxlint-disable lines-between-class-members */
-import compact from "lodash/compact";
-import isNil from "lodash/isNil";
-import uniq from "lodash/uniq";
+import { compact, isNil, uniq } from "es-toolkit/compat";
 import type {
   Identifier,
   InferAttributes,
@@ -40,6 +38,8 @@ import {
 import { MaxLength } from "class-validator";
 import isUUID from "validator/lib/isUUID";
 import type {
+  DocumentPermission,
+  ImportableIntegrationService,
   NavigationNode,
   ProsemirrorData,
   SourceMetadata,
@@ -50,7 +50,6 @@ import slugify from "@shared/utils/slugify";
 import { DocumentValidation } from "@shared/validations";
 import { InvalidRequestError, ValidationError } from "@server/errors";
 import { generateUrlId } from "@server/utils/url";
-import { createContext } from "@server/context";
 import Collection from "./Collection";
 import FileOperation from "./FileOperation";
 import Group from "./Group";
@@ -72,7 +71,7 @@ import Length from "./validators/Length";
 import type { APIContext } from "@server/types";
 import { APIUpdateExtension } from "@server/collaboration/APIUpdateExtension";
 import { SkipChangeset } from "./decorators/Changeset";
-import type { HookContext } from "./base/Model";
+import type { EventOverrideOptions, HookContext } from "./base/Model";
 import Template from "./Template";
 
 export const DOCUMENT_VERSION = 2;
@@ -183,14 +182,12 @@ type AdditionalFindOptions = {
     return {
       include: [
         {
-          model: userId
-            ? Collection.scope([
-                "defaultScope",
-                {
-                  method: ["withMembership", userId],
-                },
-              ])
-            : Collection,
+          model: Collection.scope([
+            "defaultScope",
+            {
+              method: ["withMembership", userId],
+            },
+          ]),
           as: "collection",
           paranoid,
         },
@@ -611,7 +608,7 @@ class Document extends ArchivableModel<
   importId: string | null;
 
   @BelongsTo(() => Import, "apiImportId")
-  apiImport: Import<any> | null;
+  apiImport: Import<ImportableIntegrationService> | null;
 
   @ForeignKey(() => Import)
   @Column(DataType.UUID)
@@ -686,11 +683,30 @@ class Document extends ArchivableModel<
    * either via group or direct membership.
    *
    * @param documentId
+   * @param permission optional permission filter
+   *
    * @returns userIds
    */
-  static async membershipUserIds(documentId: string) {
+  static async membershipUserIds(
+    documentId: string,
+    permission?: DocumentPermission
+  ) {
     const document = await this.scope("withAllMemberships").findOne({
       where: { id: documentId },
+      include: [
+        {
+          association: "memberships",
+          required: false,
+          ...(permission ? { where: { permission } } : {}),
+          separate: true,
+        },
+        {
+          association: "groupMemberships",
+          required: false,
+          ...(permission ? { where: { permission } } : {}),
+          separate: true,
+        },
+      ],
     });
     if (!document) {
       return [];
@@ -925,10 +941,7 @@ class Document extends ArchivableModel<
   collaborators = async (options?: FindOptions<User>): Promise<User[]> =>
     await User.findAll({
       ...options,
-      where: {
-        ...options?.where,
-        id: this.collaboratorIds,
-      },
+      where: Object.assign({}, options?.where, { id: this.collaboratorIds }),
     });
 
   /**
@@ -1010,6 +1023,9 @@ class Document extends ArchivableModel<
     const { user } = ctx.state.auth;
     const { transaction } = ctx.state;
 
+    this.lastModifiedById = user.id;
+    this.updatedBy = user;
+
     // If the document is already published then calling publish should act like
     // a regular save
     if (this.publishedAt) {
@@ -1057,8 +1073,6 @@ class Document extends ArchivableModel<
       );
     }
 
-    this.lastModifiedById = user.id;
-    this.updatedBy = user;
     this.publishedAt = new Date();
 
     if (event) {
@@ -1217,37 +1231,36 @@ class Document extends ArchivableModel<
   };
 
   // Delete a document, archived or otherwise.
-  delete = (user: User) =>
-    this.sequelize.transaction(async (transaction: Transaction) => {
-      let deleted = false;
+  destroyWithCtx = async (
+    ctx: APIContext,
+    eventOpts?: EventOverrideOptions
+  ): Promise<void> => {
+    const { user } = ctx.state.auth;
+    const { transaction } = ctx.state;
+    let deleted = false;
 
-      if (this.collectionId) {
-        const collection = await Collection.findByPk(this.collectionId!, {
-          includeDocumentStructure: true,
-          transaction,
-          lock: transaction.LOCK.UPDATE,
-          paranoid: false,
-        });
+    if (this.collectionId) {
+      const collection = await Collection.findByPk(this.collectionId, {
+        includeDocumentStructure: true,
+        transaction,
+        lock: transaction?.LOCK.UPDATE,
+        paranoid: false,
+      });
 
-        if (!this.archivedAt || (this.archivedAt && collection?.archivedAt)) {
-          await collection?.deleteDocument(this, { transaction });
-          deleted = true;
-        }
-      }
-
-      if (!deleted) {
-        await this.destroy({
-          transaction,
-        });
+      if (!this.archivedAt || (this.archivedAt && collection?.archivedAt)) {
+        await collection?.deleteDocument(this, { transaction });
         deleted = true;
       }
+    }
 
-      this.lastModifiedById = user.id;
-      this.updatedBy = user;
-      return this.saveWithCtx(createContext({ user, transaction }), undefined, {
-        name: "delete",
-      });
-    });
+    if (!deleted) {
+      await this.destroy({ transaction });
+    }
+
+    this.lastModifiedById = user.id;
+    this.updatedBy = user;
+    await this.saveWithCtx(ctx, undefined, { name: "delete", ...eventOpts });
+  };
 
   getTimestamp = () => Math.round(new Date(this.updatedAt).getTime() / 1000);
 

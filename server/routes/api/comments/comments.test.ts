@@ -187,10 +187,12 @@ describe("#comments.list", () => {
     const comment = await buildComment({
       userId: user.id,
       documentId: document.id,
+      createdAt: new Date(Date.now() - 1000),
     });
     await buildResolvedComment(user, {
       userId: user.id,
       documentId: document.id,
+      createdAt: new Date(),
     });
     const res = await server.post("/api/comments.list", {
       body: {
@@ -397,9 +399,9 @@ describe("#comments.list", () => {
 
     expect(res.status).toEqual(200);
     expect(body.data.length).toEqual(2);
-    expect([body.data[0].id, body.data[1].id].sort()).toEqual(
-      [comment1.id, comment2.id].sort()
-    );
+    expect(
+      [body.data[0].id, body.data[1].id].sort((a, b) => a.localeCompare(b))
+    ).toEqual([comment1.id, comment2.id].sort((a, b) => a.localeCompare(b)));
     expect(body.policies.length).toEqual(2);
     expect(body.policies[0].abilities.read).toBeTruthy();
     expect(body.policies[1].abilities.read).toBeTruthy();
@@ -756,7 +758,7 @@ describe("#comments.create", () => {
     });
 
     expect(res.status).toEqual(200);
-    expect(res.json()).resolves.toMatchObject({
+    await expect(res.json()).resolves.toMatchObject({
       data: {
         data: {
           content: [

@@ -15,7 +15,7 @@ import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import fs from "fs-extra";
 import invariant from "invariant";
-import compact from "lodash/compact";
+import { compact } from "es-toolkit/compat";
 import tmp from "tmp";
 import env from "@server/env";
 import Logger from "@server/logging/Logger";
@@ -260,6 +260,10 @@ export default class S3Storage extends BaseStorage {
   private getEndpoint() {
     if (env.AWS_S3_ACCELERATE_URL) {
       return env.AWS_S3_ACCELERATE_URL;
+    }
+
+    if (!env.AWS_S3_UPLOAD_BUCKET_URL) {
+      return undefined;
     }
 
     // support old path-style S3 uploads and new virtual host uploads by

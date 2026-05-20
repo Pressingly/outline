@@ -56,7 +56,12 @@ async function presentDocument(
     url: document.path,
     urlId: document.urlId,
     title: document.title,
-    data: asData || options?.includeData ? data : undefined,
+    data:
+      options?.includeData === false
+        ? undefined
+        : asData || options?.includeData
+          ? data
+          : undefined,
     text,
     icon: document.icon,
     color: document.color,
@@ -88,6 +93,10 @@ async function presentDocument(
 
   if (options.isPublic && !options.includeUpdatedAt) {
     delete res.updatedAt;
+  }
+
+  if (document.summary) {
+    res.summary = document.summary;
   }
 
   if (!options.isPublic) {

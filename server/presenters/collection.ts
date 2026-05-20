@@ -20,7 +20,7 @@ export default async function presentCollection(
 ) {
   const asData = !ctx || Number(ctx?.headers["x-api-version"] ?? 0) >= 3;
 
-  const res: Record<string, any> = {
+  const res: Record<string, unknown> = {
     id: collection.id,
     url: collection.path,
     urlId: collection.urlId,
@@ -54,6 +54,7 @@ export default async function presentCollection(
     res.index = collection.index;
     res.sharing = collection.sharing;
     res.commenting = collection.commenting;
+    res.templateManagement = collection.templateManagement;
     res.permission = collection.permission;
     res.deletedAt = collection.deletedAt;
     res.archivedAt = collection.archivedAt;

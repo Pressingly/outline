@@ -4,7 +4,10 @@ import type { FindOptions, WhereOptions } from "sequelize";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { CommentStatusFilter } from "@shared/types";
+import { ProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
+import type { CommentMark } from "@shared/utils/ProsemirrorHelper";
 import { commentParser } from "@server/editor";
+import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { Comment, Collection, Document } from "@server/models";
 import { authorize } from "@server/policies";
 import { presentComment } from "@server/presenters";
@@ -14,6 +17,7 @@ import {
   success,
   buildAPIContext,
   getActorFromContext,
+  optionalString,
   withTracing,
 } from "./util";
 
@@ -23,10 +27,17 @@ import {
  * ProseMirror JSON.
  *
  * @param comment - the comment model instance.
+ * @param commentMarks - optional precomputed comment marks to avoid reparsing.
  * @returns the presented comment with an additional `text` field.
  */
-function presentCommentWithText(comment: Comment) {
-  const presented = presentComment(comment);
+function presentCommentWithText(
+  comment: Comment,
+  commentMarks?: CommentMark[]
+) {
+  const presented = presentComment(comment, {
+    includeAnchorText: true,
+    commentMarks,
+  });
   return {
     ...presented,
     text: comment.toPlainText(),
@@ -53,31 +64,28 @@ export function commentTools(server: McpServer, scopes: string[]) {
           readOnlyHint: true,
         },
         inputSchema: {
-          documentId: z
-            .string()
-            .optional()
-            .describe("The document ID to list comments for."),
-          collectionId: z
-            .string()
-            .optional()
-            .describe("The collection ID to list comments for."),
-          parentCommentId: z
-            .string()
-            .optional()
-            .describe("A parent comment ID to list only its replies."),
+          documentId: optionalString().describe(
+            "The document ID to list comments for."
+          ),
+          collectionId: optionalString().describe(
+            "The collection ID to list comments for."
+          ),
+          parentCommentId: optionalString().describe(
+            "A parent comment ID to list only the replies in that thread."
+          ),
           statusFilter: z
             .array(z.enum(CommentStatusFilter))
             .optional()
             .describe(
               "Filter by resolution status: resolved, unresolved, or both."
             ),
-          offset: z
+          offset: z.coerce
             .number()
             .int()
             .min(0)
             .optional()
             .describe("The pagination offset. Defaults to 0."),
-          limit: z
+          limit: z.coerce
             .number()
             .int()
             .min(1)
@@ -182,7 +190,25 @@ export function commentTools(server: McpServer, scopes: string[]) {
               });
             }
 
-            const presented = comments.map(presentCommentWithText);
+            // Precompute comment marks per document to avoid reparsing
+            // the same document for every comment.
+            const marksCache = new Map<string, CommentMark[]>();
+            const presented = comments.map((comment) => {
+              const doc = comment.document;
+              let marks: CommentMark[] | undefined;
+              if (doc) {
+                if (!marksCache.has(doc.id)) {
+                  marksCache.set(
+                    doc.id,
+                    ProsemirrorHelper.getComments(
+                      DocumentHelper.toProsemirror(doc)
+                    )
+                  );
+                }
+                marks = marksCache.get(doc.id);
+              }
+              return presentCommentWithText(comment, marks);
+            });
             return success(presented);
           } catch (err) {
             return error(err);
@@ -208,12 +234,9 @@ export function commentTools(server: McpServer, scopes: string[]) {
           text: z
             .string()
             .describe("The markdown text content of the comment."),
-          parentCommentId: z
-            .string()
-            .optional()
-            .describe(
-              "The parent comment ID to reply to. Omit for a top-level comment."
-            ),
+          parentCommentId: optionalString().describe(
+            "The parent comment ID to reply to. Omit for a top-level comment."
+          ),
         },
       },
       withTracing(
@@ -238,6 +261,7 @@ export function commentTools(server: McpServer, scopes: string[]) {
             });
 
             comment.createdBy = user;
+            comment.document = document!;
 
             const presented = presentCommentWithText(comment);
             return {
@@ -292,6 +316,9 @@ export function commentTools(server: McpServer, scopes: string[]) {
             userId: user.id,
           });
 
+          authorize(user, "read", comment);
+          authorize(user, "read", document);
+
           if (text !== undefined) {
             authorize(user, "update", comment);
             authorize(user, "comment", document);
@@ -312,6 +339,7 @@ export function commentTools(server: McpServer, scopes: string[]) {
 
           await comment.saveWithCtx(ctx, status ? { silent: true } : undefined);
 
+          comment.document = document!;
           const presented = presentCommentWithText(comment);
           return {
             content: [

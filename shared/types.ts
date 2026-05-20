@@ -32,6 +32,13 @@ export enum DirectionFilter {
   DESC = "DESC",
 }
 
+/** Model types that support search indexing. */
+export enum SearchableModel {
+  Document = "document",
+  Collection = "collection",
+  Comment = "comment",
+}
+
 export enum CollectionStatusFilter {
   Archived = "archived",
 }
@@ -475,6 +482,7 @@ export enum NotificationEventType {
   Onboarding = "emails.onboarding",
   Features = "emails.features",
   ExportCompleted = "emails.export_completed",
+  RequestDocumentAccess = "access_requests.create",
 }
 
 export enum NotificationChannelType {
@@ -514,6 +522,7 @@ export const NotificationEventDefaults: Record<NotificationEventType, boolean> =
     [NotificationEventType.ExportCompleted]: true,
     [NotificationEventType.AddUserToDocument]: true,
     [NotificationEventType.AddUserToCollection]: true,
+    [NotificationEventType.RequestDocumentAccess]: true,
   };
 
 export enum UnfurlResourceType {
@@ -586,7 +595,7 @@ export type UnfurlResponse = {
     /** Document summary */
     summary: string;
     /** Viewer's last activity on this document */
-    lastActivityByViewer: string;
+    lastActivityByViewer?: string;
   };
   [UnfurlResourceType.Issue]: {
     /** The resource type */
@@ -668,6 +677,8 @@ export type UnfurlResponse = {
 export enum QueryNotices {
   UnsubscribeDocument = "unsubscribe-document",
   UnsubscribeCollection = "unsubscribe-collection",
+  Subscribed = "subscribed",
+  Unsubscribed = "unsubscribed",
 }
 
 export type JSONValue =
@@ -681,15 +692,17 @@ export type JSONValue =
 
 export type JSONObject = { [x: string]: JSONValue };
 
+export type ProsemirrorMark = {
+  type: string;
+  attrs?: JSONObject;
+};
+
 export type ProsemirrorData = {
   type: string;
   content?: ProsemirrorData[];
   text?: string;
   attrs?: JSONObject;
-  marks?: {
-    type: string;
-    attrs?: JSONObject;
-  }[];
+  marks?: ProsemirrorMark[];
 };
 
 export type ProsemirrorDoc = {
@@ -711,6 +724,8 @@ export enum TextEditMode {
   Append = "append",
   /** Prepend new content to the beginning of the document. */
   Prepend = "prepend",
+  /** Patch specific content within the document by finding and replacing text. */
+  Patch = "patch",
 }
 
 export enum EmojiCategory {

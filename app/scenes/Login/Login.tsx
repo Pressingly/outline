@@ -1,4 +1,4 @@
-import find from "lodash/find";
+import { find } from "es-toolkit/compat";
 import { observer } from "mobx-react";
 import { EmailIcon } from "outline-icons";
 import * as React from "react";
@@ -70,6 +70,23 @@ function Login({ children, onBack }: Props) {
   );
   const [lastVisitedPath] = useLastVisitedPath();
   const [spendPostLoginPath] = usePostLoginPath();
+  const hasRedirectedToOidc = React.useRef(false);
+
+  const shouldRedirectToOidc =
+    !auth.authenticated &&
+    !auth.isFetching &&
+    config?.providers.length === 1 &&
+    config.providers[0].id === "oidc" &&
+    !env.OIDC_DISABLE_REDIRECT &&
+    !query.get("notice") &&
+    !query.get("logout");
+
+  React.useEffect(() => {
+    if (shouldRedirectToOidc && !hasRedirectedToOidc.current && config) {
+      hasRedirectedToOidc.current = true;
+      window.location.href = getRedirectUrl(config.providers[0].authUrl);
+    }
+  }, [shouldRedirectToOidc, config]);
 
   const handleReset = React.useCallback(() => {
     setEmailLinkSentTo("");
@@ -81,7 +98,7 @@ function Login({ children, onBack }: Props) {
   const handleGoSubdomain = React.useCallback(async (event) => {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.target));
-    await navigateToSubdomain(data.subdomain.toString());
+    await navigateToSubdomain(data.subdomain as string);
   }, []);
 
   React.useEffect(() => {
@@ -270,16 +287,10 @@ function Login({ children, onBack }: Props) {
     );
   }
 
-  // If there is only one provider and it's OIDC, redirect immediately.
-  if (
-    config.providers.length === 1 &&
-    config.providers[0].id === "oidc" &&
-    !env.OIDC_DISABLE_REDIRECT &&
-    !query.get("notice") &&
-    !query.get("logout")
-  ) {
-    window.location.href = getRedirectUrl(config.providers[0].authUrl);
-    return null;
+  // If there is only one provider and it's OIDC, the redirect is performed
+  // from the effect above – render a loading indicator while we wait.
+  if (shouldRedirectToOidc) {
+    return <LoadingIndicator />;
   }
 
   return (

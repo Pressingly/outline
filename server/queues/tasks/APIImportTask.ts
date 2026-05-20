@@ -1,7 +1,5 @@
 import type { JobOptions } from "bull";
-import chunk from "lodash/chunk";
-import truncate from "lodash/truncate";
-import uniqBy from "lodash/uniqBy";
+import { chunk, truncate, uniqBy } from "es-toolkit/compat";
 import { Fragment, Node } from "prosemirror-model";
 import type { WhereOptions } from "sequelize";
 import { Transaction } from "sequelize";
@@ -13,7 +11,6 @@ import type {
   ProsemirrorDoc,
 } from "@shared/types";
 import { AttachmentPreset, ImportState, ImportTaskState } from "@shared/types";
-import { ProsemirrorHelper as SharedProseMirrorHelper } from "@shared/utils/ProsemirrorHelper";
 import { createContext } from "@server/context";
 import { schema } from "@server/editor";
 import Logger from "@server/logging/Logger";
@@ -262,9 +259,9 @@ export default abstract class APIImportTask<
   }): Promise<ProsemirrorDoc> {
     const docNode = ProsemirrorHelper.toProsemirror(doc);
     const nodes = [
-      ...SharedProseMirrorHelper.getImages(docNode),
-      ...SharedProseMirrorHelper.getVideos(docNode),
-      ...SharedProseMirrorHelper.getAttachments(docNode),
+      ...ProsemirrorHelper.getImages(docNode),
+      ...ProsemirrorHelper.getVideos(docNode),
+      ...ProsemirrorHelper.getAttachments(docNode),
     ];
 
     if (!nodes.length) {

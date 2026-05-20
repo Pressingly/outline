@@ -15,6 +15,7 @@ import { Integration } from "@server/models";
 import { opensearchResponse } from "@server/utils/opensearch";
 import { getTeamFromContext } from "@server/utils/passport";
 import { robotsResponse } from "@server/utils/robots";
+import { isInvalidAppPath } from "@server/utils/url";
 import apexRedirect from "../middlewares/apexRedirect";
 import { renderApp, renderShare } from "./app";
 import { renderEmbed } from "./embeds";
@@ -52,7 +53,8 @@ router.use(["/images/*", "/email/*", "/fonts/*"], async (ctx, next) => {
 router.use(
   ["/share/:shareId", "/share/:shareId/doc/:documentSlug", "/share/:shareId/*"],
   (ctx) => {
-    ctx.redirect(ctx.path.replace(/^\/share/, "/s"));
+    const redirectPath = ctx.path.replace(/^\/share/, "/s");
+    ctx.redirect(redirectPath + ctx.request.URL.search);
     ctx.status = 301;
   }
 );
@@ -216,6 +218,11 @@ router.get("/sitemap.xml", async (ctx) => {
 
 // catch all for application
 router.get("*", async (ctx, next) => {
+  if (isInvalidAppPath(ctx.path)) {
+    ctx.status = 404;
+    return;
+  }
+
   if (ctx.state?.rootShare) {
     // Only allow root path for root share domains, return 404 for other paths.
     // Valid paths like /doc/:documentSlug and /sitemap.xml are handled above.

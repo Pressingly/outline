@@ -1,7 +1,6 @@
 import path from "node:path";
 import fs from "fs-extra";
-import chunk from "lodash/chunk";
-import truncate from "lodash/truncate";
+import { chunk, truncate } from "es-toolkit/compat";
 import type { InferCreationAttributes } from "sequelize";
 import tmp from "tmp";
 import type { CollectionSort, ProsemirrorData } from "@shared/types";
@@ -305,6 +304,7 @@ export default abstract class ImportTask extends BaseTask<Props> {
     const collections = new Map<string, Collection>();
     const documents = new Map<string, Document>();
     const attachments = new Map<string, Attachment>();
+    const userIdCache = new Map<string, string | undefined>();
 
     const user = await User.findByPk(fileOperation.userId, {
       rejectOnEmpty: true,
@@ -437,6 +437,13 @@ export default abstract class ImportTask extends BaseTask<Props> {
               );
             }
 
+            const resolvedUserId =
+              (await this.resolveUserId(
+                item,
+                fileOperation.teamId,
+                userIdCache
+              )) ?? fileOperation.userId;
+
             const document = await documentCreator(ctx, {
               sourceMetadata: {
                 fileName: path.basename(item.path),
@@ -457,6 +464,8 @@ export default abstract class ImportTask extends BaseTask<Props> {
               publishedAt: item.updatedAt ?? item.createdAt ?? new Date(),
               parentDocumentId: item.parentDocumentId,
               importId: fileOperation.id,
+              createdById: resolvedUserId,
+              lastModifiedById: resolvedUserId,
             });
             documents.set(item.id, document);
 
@@ -533,6 +542,60 @@ export default abstract class ImportTask extends BaseTask<Props> {
       priority: TaskPriority.Low,
       attempts: 1,
     };
+  }
+
+  /**
+   * Resolves the original document author to an internal user, using a cache
+   * to avoid redundant database queries. Attempts to match by user ID first,
+   * then by email. Both hits and misses are cached.
+   *
+   * @param item the document import item containing createdById and createdByEmail.
+   * @param teamId the team ID to scope the lookup to.
+   * @param cache a map used to cache resolved user IDs across calls.
+   * @returns the resolved user ID, or undefined if no match was found.
+   */
+  private async resolveUserId(
+    item: { createdById?: string; createdByEmail?: string | null },
+    teamId: string,
+    cache: Map<string, string | undefined>
+  ): Promise<string | undefined> {
+    if (item.createdById) {
+      const cacheKey = `id:${item.createdById}`;
+      if (cache.has(cacheKey)) {
+        return cache.get(cacheKey);
+      }
+
+      const user = await User.findOne({
+        where: { id: item.createdById, teamId },
+      });
+      if (user) {
+        cache.set(cacheKey, user.id);
+        return user.id;
+      }
+      cache.set(cacheKey, undefined);
+    }
+
+    if (item.createdByEmail) {
+      const email = item.createdByEmail.toLowerCase().trim();
+      const cacheKey = `email:${email}`;
+      if (cache.has(cacheKey)) {
+        return cache.get(cacheKey);
+      }
+
+      const user = await User.findOne({
+        where: { email, teamId },
+      });
+      if (user) {
+        cache.set(cacheKey, user.id);
+        if (item.createdById) {
+          cache.set(`id:${item.createdById}`, user.id);
+        }
+        return user.id;
+      }
+      cache.set(cacheKey, undefined);
+    }
+
+    return undefined;
   }
 
   private async preprocessDocUrlIds(data: StructuredImportData) {

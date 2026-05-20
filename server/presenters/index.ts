@@ -5,6 +5,7 @@ import presentAvailableTeam from "./availableTeam";
 import presentCollection from "./collection";
 import presentComment from "./comment";
 import presentDocument, { presentDocuments } from "./document";
+import presentDocumentInsight from "./documentInsight";
 import presentEvent from "./event";
 import presentExternalGroup from "./externalGroup";
 import presentFileOperation from "./fileOperation";
@@ -14,6 +15,7 @@ import presentGroupUser from "./groupUser";
 import presentImport from "./import";
 import presentIntegration from "./integration";
 import presentMembership from "./membership";
+import presentNavigationNode from "./navigationNode";
 import presentOAuthClient, { presentPublishedOAuthClient } from "./oauthClient";
 import presentPin from "./pin";
 import presentPolicies from "./policy";
@@ -31,6 +33,7 @@ import presentTemplate from "./template";
 import presentUser from "./user";
 import presentView from "./view";
 import presentEmoji from "./emoji";
+import presentAccessRequest from "./accessRequest";
 
 export {
   presentApiKey,
@@ -41,6 +44,7 @@ export {
   presentComment,
   presentDocument,
   presentDocuments,
+  presentDocumentInsight,
   presentEvent,
   presentExternalGroup,
   presentFileOperation,
@@ -50,6 +54,7 @@ export {
   presentImport,
   presentIntegration,
   presentMembership,
+  presentNavigationNode,
   presentOAuthClient,
   presentPublishedOAuthClient,
   presentPublicTeam,
@@ -68,4 +73,5 @@ export {
   presentUser,
   presentView,
   presentEmoji,
+  presentAccessRequest,
 };

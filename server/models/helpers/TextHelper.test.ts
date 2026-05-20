@@ -1,9 +1,8 @@
-import { ProsemirrorHelper as SharedProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
 import { createContext } from "@server/context";
 import { buildProseMirrorDoc, buildUser } from "@server/test/factories";
 import { ProsemirrorHelper } from "./ProsemirrorHelper";
 
-jest.mock("@server/storage/files");
+vi.mock("@server/storage/files");
 
 describe("ProsemirrorHelper", () => {
   describe("replaceImagesWithAttachments", () => {
@@ -43,7 +42,7 @@ describe("ProsemirrorHelper", () => {
         },
       ]);
 
-      const images = SharedProsemirrorHelper.getImages(doc);
+      const images = ProsemirrorHelper.getImages(doc);
       expect(images.length).toBe(1);
       expect(images[0].attrs.src).toBe("https://example.com/image.png");
       expect(images[0].attrs.alt).toBe("Test image");
