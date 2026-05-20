@@ -213,7 +213,7 @@ export function checkUserContinuity(): void {
         // best effort
       }
       clearAuxiliaryUserState();
-      Promise.all([
+      void Promise.all([
         cleanupIndexedDB(),
         cleanupCachesAndServiceWorkers(),
       ]).finally(() => {
@@ -261,7 +261,7 @@ export function checkUserContinuity(): void {
     //   - Service Worker → unregister all (forces re-registration on
     //                       the new session so SW state is per-user)
     clearAuxiliaryUserState();
-    Promise.all([
+    void Promise.all([
       cleanupIndexedDB(),
       cleanupCachesAndServiceWorkers(),
     ]).finally(() => {
