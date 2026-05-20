@@ -18,6 +18,7 @@ import useCurrentTeam from "~/hooks/useCurrentTeam";
 import useKeyDown from "~/hooks/useKeyDown";
 import usePolicy from "~/hooks/usePolicy";
 import usePrevious from "~/hooks/usePrevious";
+import useShareDataLoader from "~/hooks/useShareDataLoader";
 import useStores from "~/hooks/useStores";
 import type { Permission } from "~/types";
 import { collectionPath, urlify } from "~/utils/routeHelpers";
@@ -35,11 +36,22 @@ type Props = {
   onRequestClose: () => void;
   /** Whether the popover is visible. */
   visible: boolean;
+  /** Whether the share data is currently loading, managed externally. */
+  loading?: boolean;
 };
 
-function SharePopover({ collection, visible, onRequestClose }: Props) {
+function SharePopover({
+  collection,
+  visible,
+  onRequestClose,
+  loading: externalLoading,
+}: Props) {
   const team = useCurrentTeam();
   const { groupMemberships, users, groups, memberships, shares } = useStores();
+  const { preload, loading: internalLoading } = useShareDataLoader({
+    collection,
+  });
+  const loading = externalLoading ?? internalLoading;
   const { t } = useTranslation();
   const can = usePolicy(collection);
   const [query, setQuery] = React.useState("");
@@ -54,6 +66,7 @@ function SharePopover({ collection, visible, onRequestClose }: Props) {
   const share = shares.getByCollectionId(collection.id);
   const prevPendingIds = usePrevious(pendingIds);
 
+  const wrapperRef = React.useRef<HTMLDivElement | null>(null);
   const suggestionsRef = React.useRef<HTMLDivElement | null>(null);
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
 
@@ -77,6 +90,15 @@ function SharePopover({ collection, visible, onRequestClose }: Props) {
     }
   );
 
+  // Move focus into the popover to account for lazy-loading
+  React.useLayoutEffect(() => {
+    if (!hasRendered) {
+      return;
+    }
+
+    (searchInputRef.current ?? wrapperRef.current)?.focus();
+  }, [hasRendered]);
+
   // Hide the picker when the popover is closed
   React.useEffect(() => {
     if (visible) {
@@ -94,10 +116,12 @@ function SharePopover({ collection, visible, onRequestClose }: Props) {
 
   React.useEffect(() => {
     if (visible) {
-      void collection.share();
+      if (externalLoading === undefined) {
+        preload();
+      }
       setHasRendered(true);
     }
-  }, [collection, visible]);
+  }, [visible, externalLoading, preload]);
 
   React.useEffect(() => {
     if (prevPendingIds && pendingIds.length > prevPendingIds.length) {
@@ -337,7 +361,7 @@ function SharePopover({ collection, visible, onRequestClose }: Props) {
   );
 
   return (
-    <Wrapper>
+    <Wrapper ref={wrapperRef} tabIndex={-1}>
       {can.update && (
         <SearchInput
           ref={searchInputRef}
@@ -368,6 +392,7 @@ function SharePopover({ collection, visible, onRequestClose }: Props) {
           share={share}
           invitedInSession={invitedInSession}
           visible={visible}
+          loading={loading}
         />
       </div>
     </Wrapper>

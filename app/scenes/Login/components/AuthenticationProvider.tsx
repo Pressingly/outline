@@ -32,7 +32,8 @@ function AuthenticationProvider(props: Props) {
   const [isSubmitting, setSubmitting] = React.useState(false);
   const [email, setEmail] = React.useState("");
   const formRef = React.useRef<HTMLFormElement>(null);
-  const { isCreate, id, name, authUrl, onEmailSuccess, ...rest } = props;
+  const { isCreate, id, name, authUrl, onEmailSuccess, preferOTP, ...rest } =
+    props;
   const clientType = Desktop.isElectron() ? Client.Desktop : Client.Web;
 
   const handleChangeEmail = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -51,7 +52,7 @@ function AuthenticationProvider(props: Props) {
         const response = await client.post(event.currentTarget.action, {
           email,
           client: clientType,
-          preferOTP: props.preferOTP,
+          preferOTP,
         });
 
         if (response.redirect) {
@@ -89,18 +90,22 @@ function AuthenticationProvider(props: Props) {
 
         // Populate hidden form fields with authentication data
         if (formRef.current) {
-          const createInputs = (obj: any, prefix = "") => {
+          const createInputs = (obj: Record<string, unknown>, prefix = "") => {
             Object.entries(obj).forEach(([key, value]) => {
+              if (value === undefined || value === null) {
+                return;
+              }
+
               const fieldName = prefix ? `${prefix}[${key}]` : key;
 
-              if (value && typeof value === "object" && !Array.isArray(value)) {
-                createInputs(value, fieldName);
+              if (typeof value === "object" && !Array.isArray(value)) {
+                createInputs(value as Record<string, unknown>, fieldName);
               } else {
                 // Create hidden input for primitive values
                 const input = document.createElement("input");
                 input.type = "hidden";
                 input.name = fieldName;
-                input.value = String(value);
+                input.value = String(value as string | number | boolean);
                 formRef.current?.appendChild(input);
               }
             });

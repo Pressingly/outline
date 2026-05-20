@@ -24,7 +24,11 @@ class UnfurlsStore extends Store<Unfurl<any>> {
   }): Promise<Unfurl<UnfurlType> | undefined> => {
     try {
       const protocol = new URL(url).protocol;
-      if (protocol !== "http:" && protocol !== "https:" && protocol !== "mention:") {
+      if (
+        protocol !== "http:" &&
+        protocol !== "https:" &&
+        protocol !== "mention:"
+      ) {
         return;
       }
     } catch (_err) {
@@ -83,7 +87,8 @@ class UnfurlsStore extends Store<Unfurl<any>> {
         data,
       } as Unfurl<UnfurlType>);
     } catch (err) {
-      Logger.warn(`Failed to unfurl url ${url}`, {
+      Logger.warn("Failed to unfurl url", {
+        url,
         message: err.message,
       });
       return;

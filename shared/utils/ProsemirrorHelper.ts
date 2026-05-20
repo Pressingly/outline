@@ -49,9 +49,37 @@ export const attachmentPublicRegex =
 
 export class ProsemirrorHelper {
   /**
+   * Remove specific mark types from all nodes in the document.
+   *
+   * @param doc the prosemirror document or JSON data.
+   * @param marks the mark type names to remove.
+   * @returns the document data with specified marks removed.
+   */
+  static removeMarks(doc: Node | ProsemirrorData, marks: string[]) {
+    const json = "toJSON" in doc ? (doc.toJSON() as ProsemirrorData) : doc;
+    const markSet = new Set(marks);
+
+    function removeMarksInner(node: ProsemirrorData) {
+      if (node.marks) {
+        node.marks = node.marks.filter((mark) => !markSet.has(mark.type));
+      }
+      if (node.attrs?.marks) {
+        node.attrs.marks = (node.attrs.marks as { type: string }[])?.filter(
+          (mark) => !markSet.has(mark.type)
+        );
+      }
+      if (node.content) {
+        node.content.forEach(removeMarksInner);
+      }
+      return node;
+    }
+    return removeMarksInner(json);
+  }
+
+  /**
    * Get a new empty document.
    *
-   * @returns A new empty document as JSON.
+   * @returns a new empty document as JSON.
    */
   static getEmptyDocument(): ProsemirrorData {
     return {
@@ -191,7 +219,12 @@ export class ProsemirrorHelper {
         }
       });
 
-      (node.attrs.marks ?? []).forEach((mark: any) => {
+      (
+        (node.attrs.marks ?? []) as {
+          type: string;
+          attrs: Partial<CommentMark>;
+        }[]
+      ).forEach((mark) => {
         if (mark.type === "comment") {
           comments.push({
             ...mark.attrs,
@@ -243,7 +276,9 @@ export class ProsemirrorHelper {
     const anchors: NodeAnchor[] = [];
     doc.descendants((node, pos) => {
       if (Array.isArray(node.attrs?.marks)) {
-        node.attrs.marks.forEach((mark: any) => {
+        (
+          node.attrs.marks as { type?: string; attrs?: { id?: string } }[]
+        ).forEach((mark) => {
           if (mark?.type === "comment" && mark?.attrs?.id) {
             anchors.push({
               pos,
@@ -471,19 +506,19 @@ export class ProsemirrorHelper {
       if (
         node.type === "image" &&
         node.attrs?.src &&
-        regex.test(String(node.attrs.src))
+        regex.test(node.attrs.src as string)
       ) {
         node.attrs.src = env.URL + node.attrs.src;
       } else if (
         node.type === "video" &&
         node.attrs?.src &&
-        regex.test(String(node.attrs.src))
+        regex.test(node.attrs.src as string)
       ) {
         node.attrs.src = env.URL + node.attrs.src;
       } else if (
         node.type === "attachment" &&
         node.attrs?.href &&
-        regex.test(String(node.attrs.href))
+        regex.test(node.attrs.href as string)
       ) {
         node.attrs.href = env.URL + node.attrs.href;
       }

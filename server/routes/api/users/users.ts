@@ -232,6 +232,7 @@ router.post(
 
     await new ConfirmUpdateEmail({
       to: email,
+      language: user.language,
       previous: user.email,
       code: user.getEmailUpdateToken(email),
       teamUrl: team.url,
@@ -535,7 +536,7 @@ router.post(
   validate(T.UsersInviteSchema),
   transaction(),
   async (ctx: APIContext<T.UsersInviteReq>) => {
-    const { invites } = ctx.input.body;
+    const { invites, suppressEmail } = ctx.input.body;
     const { user } = ctx.state.auth;
 
     if (invites.length > UserValidation.maxInvitesPerRequest) {
@@ -545,7 +546,7 @@ router.post(
     }
     authorize(user, "inviteUser", user.team);
 
-    const response = await userInviter(ctx, { invites });
+    const response = await userInviter(ctx, { invites, suppressEmail });
 
     ctx.body = {
       data: {
@@ -581,6 +582,7 @@ router.post(
 
     await new InviteEmail({
       to: user.email,
+      language: user.language,
       name: user.name,
       actorName: actor.name,
       actorEmail: actor.email,
@@ -620,6 +622,7 @@ router.post(
 
     await new ConfirmUserDeleteEmail({
       to: user.email,
+      language: user.language,
       deleteConfirmationCode: user.deleteConfirmationCode,
       teamName: user.team.name,
       teamUrl: user.team.url,

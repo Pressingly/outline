@@ -30,6 +30,7 @@ export type MenuItemButton = {
   disabled?: boolean;
   icon?: React.ReactNode;
   tooltip?: React.ReactChild;
+  shortcut?: string[];
 };
 
 export type MenuItemWithChildren = {
@@ -64,6 +65,7 @@ export type MenuInternalLink = {
   selected?: boolean;
   disabled?: boolean;
   icon?: React.ReactNode;
+  shortcut?: string[];
 };
 
 export type MenuExternalLink = {
@@ -75,6 +77,7 @@ export type MenuExternalLink = {
   disabled?: boolean;
   level?: number;
   icon?: React.ReactNode;
+  shortcut?: string[];
 };
 
 export type MenuGroup = {
@@ -113,13 +116,13 @@ export type ActionContext = {
 
   // New API - work directly with Model instances
   getActiveModels: <T extends Model>(
-    modelClass: new (...args: any[]) => T
+    modelClass: new (...args: never[]) => T
   ) => T[];
   getActiveModel: <T extends Model>(
-    modelClass: new (...args: any[]) => T
+    modelClass: new (...args: never[]) => T
   ) => T | undefined;
   getActivePolicies: <T extends Model>(
-    modelClass: new (...args: any[]) => T
+    modelClass: new (...args: never[]) => T
   ) => Policy[];
   isModelActive: (model: Model) => boolean;
   activeModels: ReadonlySet<Model>;
@@ -138,6 +141,7 @@ type BaseAction = {
   analyticsName?: string;
   name: ((context: ActionContext) => React.ReactNode) | React.ReactNode;
   section: ((context: ActionContext) => string) | string;
+  description?: ((context: ActionContext) => string) | string;
   shortcut?: string[];
   keywords?: string;
   /** Higher number is higher in results, default is 0. */
@@ -156,7 +160,7 @@ export type Action = BaseAction & {
   tooltip?:
     | ((context: ActionContext) => React.ReactChild | undefined)
     | React.ReactChild;
-  perform: (context: ActionContext) => any;
+  perform: (context: ActionContext) => unknown;
 };
 
 export type InternalLinkAction = BaseAction & {
