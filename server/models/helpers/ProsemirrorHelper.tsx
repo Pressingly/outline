@@ -21,6 +21,7 @@ import {
   attachmentRedirectRegex,
   ProsemirrorHelper as SharedProsemirrorHelper,
 } from "@shared/utils/ProsemirrorHelper";
+
 import parseDocumentSlug from "@shared/utils/parseDocumentSlug";
 import { isRTL } from "@shared/utils/rtl";
 import { isInternalUrl } from "@shared/utils/urls";
@@ -49,6 +50,8 @@ export type HTMLOptions = {
   baseUrl?: string;
   /** Changes to highlight in the document */
   changes?: readonly ExtendedChange[];
+  /** CSP nonce to apply to injected inline scripts */
+  cspNonce?: string;
 };
 
 export type MentionAttrs = {
@@ -62,7 +65,7 @@ export type MentionAttrs = {
 };
 
 @trace()
-export class ProsemirrorHelper {
+export class ProsemirrorHelper extends SharedProsemirrorHelper {
   /**
    * Returns the input text as a Y.Doc.
    *
@@ -255,33 +258,6 @@ export class ProsemirrorHelper {
     return blockNode ? doc.copy(Fragment.fromArray([blockNode])) : undefined;
   }
 
-  /**
-   * Removes all marks from the node that match the given types.
-   *
-   * @param data The ProsemirrorData object to remove marks from
-   * @param marks The mark types to remove
-   * @returns The content with marks removed
-   */
-  static removeMarks(doc: Node | ProsemirrorData, marks: string[]) {
-    const json = "toJSON" in doc ? (doc.toJSON() as ProsemirrorData) : doc;
-
-    function removeMarksInner(node: ProsemirrorData) {
-      if (node.marks) {
-        node.marks = node.marks.filter((mark) => !marks.includes(mark.type));
-      }
-      if (node.attrs?.marks) {
-        node.attrs.marks = (node.attrs.marks as { type: string }[])?.filter(
-          (mark) => !marks.includes(mark.type)
-        );
-      }
-      if (node.content) {
-        node.content.forEach(removeMarksInner);
-      }
-      return node;
-    }
-    return removeMarksInner(json);
-  }
-
   static async replaceInternalUrls(
     doc: Node | ProsemirrorData,
     basePath: string
@@ -395,13 +371,13 @@ export class ProsemirrorHelper {
 
     function replaceAttachmentUrls(node: ProsemirrorData) {
       if (node.attrs?.src) {
-        node.attrs.src = getMapping(String(node.attrs.src));
+        node.attrs.src = getMapping(node.attrs.src as string);
       } else if (node.attrs?.href) {
-        node.attrs.href = getMapping(String(node.attrs.href));
+        node.attrs.href = getMapping(node.attrs.href as string);
       } else if (node.marks) {
         node.marks.forEach((mark) => {
           if (mark.attrs?.href) {
-            mark.attrs.href = getMapping(String(mark.attrs.href));
+            mark.attrs.href = getMapping(mark.attrs.href as string);
           }
         });
       }
@@ -583,6 +559,10 @@ export class ProsemirrorHelper {
 
         const element = dom.window.document.createElement("script");
         element.setAttribute("type", "module");
+
+        if (options?.cspNonce) {
+          element.setAttribute("nonce", options.cspNonce);
+        }
 
         // Inject Mermaid script
         if (mermaidElements.length) {
@@ -777,7 +757,7 @@ export class ProsemirrorHelper {
     // Create a new document with the emoji removed from the text
     const json = doc.toJSON();
 
-    function removeEmojiFromNode(node: any): any {
+    function removeEmojiFromNode(node: ProsemirrorData): ProsemirrorData {
       if (node.type === "text" && node.text && node.text.startsWith(emoji)) {
         return {
           ...node,
@@ -788,7 +768,7 @@ export class ProsemirrorHelper {
         let found = false;
         return {
           ...node,
-          content: node.content.map((child: any) => {
+          content: node.content.map((child) => {
             if (found) {
               return child;
             }
@@ -803,7 +783,7 @@ export class ProsemirrorHelper {
       return node;
     }
 
-    const modifiedJson = removeEmojiFromNode(json);
+    const modifiedJson = removeEmojiFromNode(json as ProsemirrorData);
     return {
       emoji,
       doc: Node.fromJSON(schema, modifiedJson),
@@ -818,7 +798,7 @@ export class ProsemirrorHelper {
    * @returns A cleanup function to restore the global environment.
    */
   public static patchGlobalEnv(domWindow: JSDOM["window"]) {
-    const g = global as any;
+    const g = global as unknown as Record<string, unknown>;
 
     const globalParams = {
       window: g.window,
@@ -875,8 +855,8 @@ export class ProsemirrorHelper {
     doc: Node,
     user: User
   ): Promise<Node> {
-    const images = SharedProsemirrorHelper.getImages(doc);
-    const videos = SharedProsemirrorHelper.getVideos(doc);
+    const images = ProsemirrorHelper.getImages(doc);
+    const videos = ProsemirrorHelper.getVideos(doc);
     const nodes = [...images, ...videos];
 
     if (!nodes.length) {

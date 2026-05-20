@@ -3,7 +3,8 @@ import { ArrowIcon, BackIcon } from "outline-icons";
 import * as React from "react";
 import styled, { css, useTheme } from "styled-components";
 import { s, ellipsis } from "@shared/styles";
-import { normalizeKeyDisplay } from "@shared/utils/keyboard";
+import { normalizeKeyDisplay, shortcutSeparator } from "@shared/utils/keyboard";
+import Highlight from "~/components/Highlight";
 import Flex from "~/components/Flex";
 import Key from "~/components/Key";
 import Text from "~/components/Text";
@@ -15,14 +16,22 @@ type Props = {
   currentRootActionId: string | null | undefined;
 };
 
+const SEARCH_RESULT_REGEX = /<b\b[^>]*>(.*?)<\/b>/gi;
+
+function replaceResultMarks(tag: string) {
+  // don't use SEARCH_RESULT_REGEX here as it causes
+  // an infinite loop to trigger a regex inside it's own callback
+  return tag.replace(/<b\b[^>]*>(.*?)<\/b>/gi, "$1");
+}
+
 function CommandBarItem(
   { action, active, currentRootActionId }: Props,
   ref: React.RefObject<HTMLDivElement>
 ) {
   const theme = useTheme();
   const ancestors = React.useMemo(() => {
-    if (!currentRootActionId) {
-      return action.ancestors;
+    if (!currentRootActionId || !action.ancestors) {
+      return action.ancestors ?? [];
     }
     const index = action.ancestors.findIndex(
       (ancestor) => ancestor.id === currentRootActionId
@@ -56,6 +65,16 @@ function CommandBarItem(
         ))}
         {action.name}
         {action.children?.length ? "…" : ""}
+        {action.subtitle && (
+          <Text type="secondary" ellipsis>
+            &nbsp;&nbsp;
+            <Highlight
+              text={action.subtitle}
+              highlight={SEARCH_RESULT_REGEX}
+              processResult={replaceResultMarks}
+            />
+          </Text>
+        )}
       </Content>
       {action.shortcut?.length ? (
         <Shortcut>
@@ -71,9 +90,12 @@ function CommandBarItem(
               ) : (
                 ""
               )}
-              {sc.split("+").map((key) => (
-                <Key key={key}>{normalizeKeyDisplay(key)}</Key>
-              ))}
+              {sc.split("+").flatMap((key, i, arr) => {
+                const el = <Key key={key}>{normalizeKeyDisplay(key)}</Key>;
+                return i < arr.length - 1 && shortcutSeparator
+                  ? [el, shortcutSeparator]
+                  : [el];
+              })}
             </React.Fragment>
           ))}
         </Shortcut>

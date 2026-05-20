@@ -24,6 +24,7 @@ import {
 } from "@shared/types";
 import { subtractDate } from "@shared/utils/date";
 import slugify from "@shared/utils/slugify";
+import { Day } from "@shared/utils/time";
 import documentCreator from "@server/commands/documentCreator";
 import documentDuplicator from "@server/commands/documentDuplicator";
 import documentLoader from "@server/commands/documentLoader";
@@ -49,6 +50,7 @@ import {
   Relationship,
   Collection,
   Document,
+  DocumentInsight,
   Event,
   Revision,
   SearchQuery,
@@ -64,11 +66,12 @@ import {
 import AttachmentHelper from "@server/models/helpers/AttachmentHelper";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
-import SearchHelper from "@server/models/helpers/SearchHelper";
+import SearchProviderManager from "@server/utils/SearchProviderManager";
 import { TextHelper } from "@server/models/helpers/TextHelper";
 import { authorize, cannot } from "@server/policies";
 import {
   presentDocument,
+  presentDocumentInsight,
   presentDocuments,
   presentPolicies,
   presentTemplate,
@@ -622,6 +625,41 @@ router.post(
 );
 
 router.post(
+  "documents.insights",
+  auth(),
+  validate(T.DocumentsInsightsSchema),
+  async (ctx: APIContext<T.DocumentsInsightsReq>) => {
+    const { id, startDate, endDate } = ctx.input.body;
+    const { user } = ctx.state.auth;
+
+    const document = await Document.findByPk(id, { userId: user.id });
+    authorize(user, "listViews", document);
+
+    if (!document.insightsEnabled) {
+      throw ValidationError("Insights are not enabled for this document");
+    }
+
+    const end = endDate ?? new Date();
+    const start = startDate ?? new Date(end.getTime() - 30 * Day.ms);
+
+    const insights = await DocumentInsight.findAll({
+      where: {
+        documentId: document.id,
+        date: {
+          [Op.gte]: start.toISOString().slice(0, 10),
+          [Op.lte]: end.toISOString().slice(0, 10),
+        },
+      },
+      order: [["date", "ASC"]],
+    });
+
+    ctx.body = {
+      data: insights.map(presentDocumentInsight),
+    };
+  }
+);
+
+router.post(
   "documents.users",
   auth(),
   pagination(),
@@ -1015,17 +1053,18 @@ router.post(
       collaboratorIds = [userId];
     }
 
-    const documents = await SearchHelper.searchTitlesForUser(user, {
-      query,
-      dateFilter,
-      statusFilter,
-      collectionId,
-      collaboratorIds,
-      offset,
-      limit,
-      sort: sort as SortFilter,
-      direction: direction as DirectionFilter,
-    });
+    const documents =
+      await SearchProviderManager.getProvider().searchTitlesForUser(user, {
+        query,
+        dateFilter,
+        statusFilter,
+        collectionId,
+        collaboratorIds,
+        offset,
+        limit,
+        sort: sort as SortFilter,
+        direction: direction as DirectionFilter,
+      });
     const policies = presentPolicies(user, documents);
     const data = await presentDocuments(ctx, documents);
 
@@ -1099,7 +1138,7 @@ router.post(
       const team = await share.$get("team");
       invariant(team, "Share must belong to a team");
 
-      response = await SearchHelper.searchForTeam(team, {
+      response = await SearchProviderManager.getProvider().searchForTeam(team, {
         query,
         collectionId: collection?.id || document?.collectionId,
         share,
@@ -1145,7 +1184,7 @@ router.post(
         collaboratorIds = [userId];
       }
 
-      response = await SearchHelper.searchForUser(user, {
+      response = await SearchProviderManager.getProvider().searchForUser(user, {
         query,
         collaboratorIds,
         collectionId,
@@ -1465,7 +1504,9 @@ router.post(
   "documents.delete",
   auth(),
   validate(T.DocumentsDeleteSchema),
+  transaction(),
   async (ctx: APIContext<T.DocumentsDeleteReq>) => {
+    const { transaction } = ctx.state;
     const { id, permanent } = ctx.input.body;
     const { user } = ctx.state.auth;
 
@@ -1473,6 +1514,7 @@ router.post(
       const document = await Document.findByPk(id, {
         userId: user.id,
         paranoid: false,
+        transaction,
       });
       authorize(user, "permanentDelete", document);
 
@@ -1488,11 +1530,12 @@ router.post(
     } else {
       const document = await Document.findByPk(id, {
         userId: user.id,
+        transaction,
       });
 
       authorize(user, "delete", document);
 
-      await document.delete(user);
+      await document.destroyWithCtx(ctx);
     }
 
     ctx.body = {

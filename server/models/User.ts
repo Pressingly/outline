@@ -60,6 +60,7 @@ import Attachment from "./Attachment";
 import AuthenticationProvider from "./AuthenticationProvider";
 import Collection from "./Collection";
 import Group from "./Group";
+import GroupUser from "./GroupUser";
 import Team from "./Team";
 import UserAuthentication from "./UserAuthentication";
 import UserMembership from "./UserMembership";
@@ -683,7 +684,7 @@ class User extends ParanoidModel<
     }
 
     const code = VerificationCode.generate();
-    await VerificationCode.store(this.email, code);
+    await VerificationCode.store(this.teamId, this.email, code);
     return code;
   };
 
@@ -847,6 +848,50 @@ class User extends ParanoidModel<
           },
         }
       );
+    }
+  }
+
+  // When a user's suspension state changes, invalidate the cached member count
+  // for every group they belong to so the count reflects only active members.
+  @AfterUpdate
+  static async invalidateGroupMemberCount(
+    model: User,
+    options: InstanceUpdateOptions<InferAttributes<User>>
+  ) {
+    if (!model.changed("suspendedAt")) {
+      return;
+    }
+
+    const groupUsers = await GroupUser.findAll({
+      attributes: ["groupId"],
+      where: { userId: model.id },
+      transaction: options.transaction,
+      raw: true,
+    });
+
+    const groupIds = [
+      ...new Set(groupUsers.map((groupUser) => groupUser.groupId)),
+    ];
+
+    if (!groupIds.length) {
+      return;
+    }
+
+    const invalidate = async () => {
+      await Promise.all(
+        groupIds.map((groupId) =>
+          CacheHelper.removeData(
+            RedisPrefixHelper.getCounterCacheKey("Group", "members", groupId)
+          )
+        )
+      );
+    };
+
+    if (options.transaction) {
+      const transaction = options.transaction.parent || options.transaction;
+      transaction.afterCommit(invalidate);
+    } else {
+      await invalidate();
     }
   }
 
