@@ -3,6 +3,7 @@ import invariant from "invariant";
 import isNil from "lodash/isNil";
 import { observable, action, computed, autorun, runInAction } from "mobx";
 import { getCookie, setCookie } from "tiny-cookie";
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import type { CustomTheme } from "@shared/types";
 import Storage from "@shared/utils/Storage";
 import { getCookieDomain, parseDomain } from "@shared/utils/domains";
@@ -214,7 +215,7 @@ export default class AuthStore extends Store<Team> {
       // throws into the ErrorBoundary. This is belt-and-suspenders on
       // top of ApiClient.fetch's primary detection; either path lands
       // us on the same wipeAndReload helper which is idempotent.
-      if (env.AUTH_TYPE === "SSO" && !res?.data?.user) {
+      if (env.AUTH_TYPE === AUTH_TYPE_SSO && !res?.data?.user) {
         Logger.warn(
           "/auth.info returned no user payload — assuming stale session"
         );

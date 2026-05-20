@@ -1,3 +1,4 @@
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import { TeamPreference, EmailDisplay } from "@shared/types";
 import env from "@server/env";
 import { User, Team } from "@server/models";
@@ -64,16 +65,19 @@ allow(User, "readEmail", User, (actor, user) => {
   );
 });
 
-allow(User, "delete", User, (actor, user) =>
-  or(
+allow(User, "delete", User, (actor, user) => {
+  if (env.AUTH_TYPE === AUTH_TYPE_SSO && actor.id === user?.id) {
+    return false;
+  }
+
+  return or(
     isTeamAdmin(actor, user),
     and(
       actor.id === user?.id,
-      !!actor.team.getPreference(TeamPreference.MembersCanDeleteAccount),
-      env.AUTH_TYPE !== "SSO"
+      !!actor.team.getPreference(TeamPreference.MembersCanDeleteAccount)
     )
-  )
-);
+  );
+});
 
 allow(User, ["activate", "suspend"], User, (actor, user) =>
   and(isTeamAdmin(actor, user), user?.id !== actor.id)

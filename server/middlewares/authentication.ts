@@ -1,6 +1,7 @@
 import { addDays } from "date-fns";
 import type { Next } from "koa";
 import capitalize from "lodash/capitalize";
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import { UserRole } from "@shared/types";
 import { slugifyDomain } from "@shared/utils/domains";
 import { parseEmail } from "@shared/utils/email";
@@ -28,9 +29,6 @@ import {
 
 /** Service identifier used by the ForwardAuth authentication flow. */
 export const FORWARDAUTH_SERVICE = "forwardauth";
-
-/** The {@link env.AUTH_TYPE} value that activates ForwardAuth/SSO mode. */
-const AUTH_TYPE_SSO = "SSO";
 
 type AuthenticationOptions = {
   /** Role required to access the route. */

@@ -1,3 +1,4 @@
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import { TeamPreference, EmailDisplay, UserRole } from "@shared/types";
 import env from "@server/env";
 import {
@@ -17,17 +18,29 @@ describe("policies/user", () => {
     });
 
     describe("when AUTH_TYPE is SSO", () => {
+      let originalAuthType: string | undefined;
+
       beforeEach(() => {
-        env.AUTH_TYPE = "SSO";
+        originalAuthType = env.AUTH_TYPE;
+        env.AUTH_TYPE = AUTH_TYPE_SSO;
       });
 
       afterEach(() => {
-        env.AUTH_TYPE = undefined;
+        env.AUTH_TYPE = originalAuthType;
       });
 
       it("should not allow users to delete their own account", async () => {
         const user = await buildUser();
         const abilities = serialize(user, user);
+        expect(abilities.delete).toBeFalsy();
+      });
+
+      it("should not allow admins to delete their own account", async () => {
+        const admin = await buildAdmin();
+        await buildUser({
+          teamId: admin.teamId,
+        });
+        const abilities = serialize(admin, admin);
         expect(abilities.delete).toBeFalsy();
       });
 
