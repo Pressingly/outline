@@ -1,4 +1,6 @@
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import { TeamPreference, EmailDisplay, UserRole } from "@shared/types";
+import env from "@server/env";
 import {
   buildUser,
   buildTeam,
@@ -8,6 +10,51 @@ import {
 import { serialize } from "./index";
 
 describe("policies/user", () => {
+  describe("delete", () => {
+    it("should allow users to delete their own account by default", async () => {
+      const user = await buildUser();
+      const abilities = serialize(user, user);
+      expect(abilities.delete).toBeTruthy();
+    });
+
+    describe("when AUTH_TYPE is SSO", () => {
+      let originalAuthType: string | undefined;
+
+      beforeEach(() => {
+        originalAuthType = env.AUTH_TYPE;
+        env.AUTH_TYPE = AUTH_TYPE_SSO;
+      });
+
+      afterEach(() => {
+        env.AUTH_TYPE = originalAuthType;
+      });
+
+      it("should not allow users to delete their own account", async () => {
+        const user = await buildUser();
+        const abilities = serialize(user, user);
+        expect(abilities.delete).toBeFalsy();
+      });
+
+      it("should not allow admins to delete their own account", async () => {
+        const admin = await buildAdmin();
+        await buildUser({
+          teamId: admin.teamId,
+        });
+        const abilities = serialize(admin, admin);
+        expect(abilities.delete).toBeFalsy();
+      });
+
+      it("should still allow admins to delete other users", async () => {
+        const admin = await buildAdmin();
+        const user = await buildUser({
+          teamId: admin.teamId,
+        });
+        const abilities = serialize(admin, user);
+        expect(abilities.delete).toBeTruthy();
+      });
+    });
+  });
+
   describe("readEmail", () => {
     it("should allow user to read their own email", async () => {
       const team = await buildTeam();

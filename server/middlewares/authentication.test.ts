@@ -1,4 +1,5 @@
 import type { DefaultState } from "koa";
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import { randomString } from "@shared/random";
 import { Scope } from "@shared/types";
 import env from "@server/env";
@@ -417,7 +418,7 @@ describe("Authentication middleware", () => {
 
   describe("with ForwardAuth headers", () => {
     beforeEach(() => {
-      env.AUTH_TYPE = "SSO";
+      env.AUTH_TYPE = AUTH_TYPE_SSO;
     });
 
     afterEach(() => {
