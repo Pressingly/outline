@@ -38,7 +38,7 @@ type SaveOptions = JSONObject & {
 export default class Document extends ArchivableModel implements Searchable {
   static modelName = "Document";
 
-  constructor(fields: Record<string, any>, store: DocumentsStore) {
+  constructor(fields: Record<string, unknown>, store: DocumentsStore) {
     super(fields, store);
 
     this.embedsDisabled = Storage.get(`embedsDisabled-${this.id}`) ?? false;
@@ -183,7 +183,7 @@ export default class Document extends ArchivableModel implements Searchable {
   parentDocument?: Document;
 
   @observable
-  collaboratorIds: string[];
+  collaboratorIds: string[] = [];
 
   @Relation(() => User)
   createdBy: User | undefined;
@@ -460,13 +460,6 @@ export default class Document extends ArchivableModel implements Searchable {
     }
   }
 
-  @action
-  share = async () =>
-    this.store.rootStore.shares.create({
-      type: "document",
-      documentId: this.id,
-    });
-
   archive = () => this.store.archive(this);
 
   restore = (options?: { revisionId?: string; collectionId?: string }) =>
@@ -522,7 +515,7 @@ export default class Document extends ArchivableModel implements Searchable {
   subscribe = () => this.store.subscribe(this);
 
   /**
-   * Unsubscribes the current user to this document.
+   * Unsubscribes the current user from this document.
    *
    * @returns A promise that resolves when the subscription is destroyed.
    */
@@ -577,7 +570,7 @@ export default class Document extends ArchivableModel implements Searchable {
       );
 
       // if saving is successful set the new values on the model itself
-      set(this, { ...params, ...model });
+      set(this, Object.assign({}, params, model));
 
       this.persistedAttributes = this.toAPI();
 

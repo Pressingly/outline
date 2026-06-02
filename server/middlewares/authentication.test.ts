@@ -1,4 +1,5 @@
 import type { DefaultState } from "koa";
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import { randomString } from "@shared/random";
 import { Scope } from "@shared/types";
 import env from "@server/env";
@@ -15,7 +16,24 @@ import { AuthenticationType } from "@server/types";
 import { JWT_COOKIE_TTL_DAYS } from "@server/utils/authentication";
 import auth, { FORWARDAUTH_SERVICE } from "./authentication";
 
-function createCtx(overrides: any = {}) {
+interface CtxOverrides {
+  originalUrl?: string;
+  request?: {
+    headers?: Record<string, string>;
+    body?: Record<string, unknown>;
+    url?: string;
+  };
+}
+
+interface MiddlewareError {
+  status?: number;
+  message?: string;
+  id?: string;
+  headers?: Record<string, string | string[]>;
+  errorData?: Record<string, unknown>;
+}
+
+function createCtx(overrides: CtxOverrides = {}) {
   const headers = {
     ...(overrides.request?.headers || {}),
   };
@@ -132,6 +150,62 @@ describe("Authentication middleware", () => {
       );
       expect(state.auth.user.id).toEqual(user.id);
     });
+    it("should authenticate with global read scope on read endpoints", async () => {
+      const state = {} as DefaultState;
+      const user = await buildUser();
+      const authMiddleware = auth();
+      const key = await buildApiKey({
+        userId: user.id,
+        scope: [Scope.Read],
+      });
+
+      await authMiddleware(
+        {
+          originalUrl: "/api/auth.info",
+          // @ts-expect-error mock request
+          request: {
+            url: "/auth.info",
+            get: jest.fn(() => `Bearer ${key.value}`),
+          },
+          state,
+          cache: {},
+        },
+        jest.fn()
+      );
+      expect(state.auth.user.id).toEqual(user.id);
+    });
+
+    it("should return 403 authorization error when scope does not match", async () => {
+      const state = {} as DefaultState;
+      const user = await buildUser();
+      const authMiddleware = auth();
+      const key = await buildApiKey({
+        userId: user.id,
+        scope: [Scope.Read],
+      });
+
+      try {
+        await authMiddleware(
+          {
+            originalUrl: "/api/documents.create",
+            // @ts-expect-error mock request
+            request: {
+              url: "/documents.create",
+              get: jest.fn(() => `Bearer ${key.value}`),
+            },
+            state,
+            cache: {},
+          },
+          jest.fn()
+        );
+        throw new Error("Expected error to be thrown");
+      } catch (e) {
+        expect(e.status).toBe(403);
+        expect(e.id).toBe("authorization_error");
+        expect(e.message).toContain("does not have access to this resource");
+      }
+    });
+
     it("should return error with invalid API key", async () => {
       const state = {} as DefaultState;
       const authMiddleware = auth();
@@ -216,7 +290,7 @@ describe("Authentication middleware", () => {
         scope: [Scope.Read],
       });
 
-      const ctx: any = createCtx({
+      const ctx = createCtx({
         originalUrl: "/api/users.info",
         request: {
           body: {
@@ -227,13 +301,14 @@ describe("Authentication middleware", () => {
 
       const authMiddleware = auth();
 
-      let error: any;
+      let error: MiddlewareError | undefined;
 
       try {
+        // @ts-expect-error mock context
         await authMiddleware(ctx, jest.fn());
         throw new Error("Expected middleware to throw");
-      } catch (e: any) {
-        error = e;
+      } catch (e) {
+        error = e as MiddlewareError;
       }
 
       expect(error).toBeDefined();
@@ -343,7 +418,7 @@ describe("Authentication middleware", () => {
 
   describe("with ForwardAuth headers", () => {
     beforeEach(() => {
-      env.AUTH_TYPE = "SSO";
+      env.AUTH_TYPE = AUTH_TYPE_SSO;
     });
 
     afterEach(() => {
@@ -613,7 +688,7 @@ describe("Authentication middleware", () => {
       const state = {} as DefaultState;
       const authMiddleware = auth();
 
-      let err: any;
+      let err: MiddlewareError | undefined;
 
       const aliceJwt = alice.getJwtToken();
 
@@ -645,13 +720,13 @@ describe("Authentication middleware", () => {
           jest.fn()
         );
       } catch (e) {
-        err = e;
+        err = e as MiddlewareError;
       }
 
       expect(err).toBeDefined();
-      expect(err.status).toBe(302);
-      expect(err.headers?.Location).toBe("/home");
-      expect(err.headers?.["set-cookie"]).toEqual(
+      expect(err?.status).toBe(302);
+      expect(err?.headers?.Location).toBe("/home");
+      expect(err?.headers?.["set-cookie"]).toEqual(
         expect.arrayContaining([
           expect.stringContaining("accessToken="),
           expect.stringContaining("lastSignedIn="),
@@ -811,7 +886,7 @@ describe("Authentication middleware - cookie cleanup regression", () => {
   it("clears auth cookies on 401 when using cookie JWT (no Authorization header)", async () => {
     const state = {} as DefaultState;
 
-    const ctx: any = {
+    const ctx = {
       state,
       cache: {},
       request: {
@@ -829,19 +904,20 @@ describe("Authentication middleware - cookie cleanup regression", () => {
 
     const authMiddleware = auth();
 
-    let err: any;
+    let err: MiddlewareError | undefined;
 
     try {
+      // @ts-expect-error mock context
       await authMiddleware(ctx, async () => {
         throw Object.assign(new Error("fail"), { status: 401 });
       });
     } catch (e) {
-      err = e;
+      err = e as MiddlewareError;
     }
 
     expect(err).toBeDefined();
 
-    expect(err.headers?.["set-cookie"]).toEqual(
+    expect(err?.headers?.["set-cookie"]).toEqual(
       expect.arrayContaining([
         expect.stringContaining("accessToken="),
         expect.stringContaining("lastSignedIn="),
@@ -852,7 +928,7 @@ describe("Authentication middleware - cookie cleanup regression", () => {
   it("does NOT clear cookies when Authorization header is present", async () => {
     const state = {} as DefaultState;
 
-    const ctx: any = {
+    const ctx = {
       state,
       cache: {},
       request: {
@@ -870,19 +946,20 @@ describe("Authentication middleware - cookie cleanup regression", () => {
 
     const authMiddleware = auth();
 
-    let err: any;
+    let err: MiddlewareError | undefined;
 
     try {
+      // @ts-expect-error mock context
       await authMiddleware(ctx, async () => {
         throw Object.assign(new Error("fail"), { status: 401 });
       });
     } catch (e) {
-      err = e;
+      err = e as MiddlewareError;
     }
 
     expect(err).toBeDefined();
 
     // 🔥 core regression assertion
-    expect(err.headers?.["set-cookie"]).toBeUndefined();
+    expect(err?.headers?.["set-cookie"]).toBeUndefined();
   });
 });

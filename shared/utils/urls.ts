@@ -59,9 +59,9 @@ export function isInternalUrl(href: string) {
 }
 
 /**
- * Returns true if the given string is a link to a documement.
+ * Returns true if the given string is a link to a document.
  *
- * @param options Parsing options.
+ * @param url The url to check.
  * @returns True if a document, false otherwise.
  */
 export function isDocumentUrl(url: string) {
@@ -79,7 +79,7 @@ export function isDocumentUrl(url: string) {
 /**
  * Returns true if the given string is a link to a collection.
  *
- * @param options Parsing options.
+ * @param url The url to check.
  * @returns True if a collection, false otherwise.
  */
 export function isCollectionUrl(url: string) {
@@ -191,14 +191,22 @@ export function sanitizeUrl(url: string | null | undefined) {
     return undefined;
   }
 
+  const allowedSchemes = [
+    "mailto:",
+    "sms:",
+    "fax:",
+    "tel:",
+    "geo:",
+    "maps:",
+    "magnet:",
+  ];
+  const lower = url.toLowerCase();
+
   if (
     !isUrl(url, { requireHostname: false }) &&
     !url.startsWith("/") &&
     !url.startsWith("#") &&
-    !url.startsWith("mailto:") &&
-    !url.startsWith("sms:") &&
-    !url.startsWith("fax:") &&
-    !url.startsWith("tel:")
+    !allowedSchemes.some((scheme) => lower.startsWith(scheme))
   ) {
     return `https://${url}`;
   }
@@ -219,6 +227,39 @@ export function urlRegex(url: string | null | undefined): RegExp | undefined {
   const urlObj = new URL(sanitizeUrl(url) as string);
 
   return new RegExp(escapeRegExp(`${urlObj.protocol}//${urlObj.host}`));
+}
+
+/**
+ * Parse the share identifier from a given url.
+ *
+ * @param url The url to parse.
+ * @returns A share identifier or undefined if not found.
+ */
+export function parseShareIdFromUrl(url: string): string | undefined {
+  if (url[0] === "/") {
+    url = `${env.URL}${url}`;
+  }
+
+  let pathname;
+  try {
+    pathname = new URL(url).pathname;
+  } catch (_err) {
+    return;
+  }
+
+  const split = pathname.split("/");
+  const indexOfS = split.indexOf("s");
+
+  if (indexOfS >= 0) {
+    const shareId = split[indexOfS + 1];
+    if (shareId) {
+      // Remove trailing format like .md
+      const dotIndex = shareId.indexOf(".");
+      return dotIndex >= 0 ? shareId.substring(0, dotIndex) : shareId;
+    }
+  }
+
+  return undefined;
 }
 
 /**

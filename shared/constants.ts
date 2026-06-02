@@ -7,6 +7,9 @@ import {
   NotificationBadgeType,
 } from "./types";
 
+/** The {@link PublicEnv.AUTH_TYPE} value that activates ForwardAuth/SSO mode. */
+export const AUTH_TYPE_SSO = "SSO";
+
 export const MAX_AVATAR_DISPLAY = 6;
 
 export const Pagination = {

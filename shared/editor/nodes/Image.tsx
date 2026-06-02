@@ -20,6 +20,7 @@ import { ImageSource } from "../lib/FileHelper";
 import { DiagramPlaceholder } from "../components/DiagramPlaceholder";
 import { addComment } from "../commands/comment";
 import { addLink } from "../commands/link";
+import { commentedImagePlugin } from "../plugins/CommentedImagePlugin";
 
 const imageSizeRegex = /\s=(\d+)?x(\d+)?$/;
 
@@ -84,7 +85,7 @@ export const downloadImageNode = async (
     document.body.removeChild(link);
   } catch {
     if (cache !== "reload") {
-      downloadImageNode(node, "reload");
+      await downloadImageNode(node, "reload");
     } else {
       window.open(sanitizeUrl(node.attrs.src), "_blank");
     }
@@ -241,6 +242,7 @@ export default class Image extends SimpleImage {
   get plugins() {
     return [
       ...super.plugins,
+      commentedImagePlugin(),
       new Plugin({
         props: {
           handleKeyDown: (view, event) => {
@@ -252,10 +254,10 @@ export default class Image extends SimpleImage {
               if (selection instanceof NodeSelection) {
                 const { node } = selection;
                 if (node.type.name === "image") {
-                  const image = document.querySelector(
+                  const image = view.dom.querySelector<HTMLImageElement>(
                     ".ProseMirror-selectednode img"
-                  ) as HTMLImageElement;
-                  image.click();
+                  );
+                  image?.click();
                   return true;
                 }
               }
@@ -365,6 +367,9 @@ export default class Image extends SimpleImage {
     ({ getPos, view }: ComponentProps) =>
     () => {
       const { commands } = this.editor;
+      if (!commands.editDiagram) {
+        return;
+      }
       const pos = getPos();
       const $pos = view.state.doc.resolve(pos);
       view.dispatch(view.state.tr.setSelection(new NodeSelection($pos)));

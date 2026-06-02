@@ -5,7 +5,9 @@ import { useState } from "react";
 import * as React from "react";
 import { useTranslation, Trans } from "react-i18next";
 import { toast } from "sonner";
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import { TeamPreference, EmailDisplay } from "@shared/types";
+import env from "~/env";
 import ConfirmationDialog from "~/components/ConfirmationDialog";
 import Heading from "~/components/Heading";
 import type { Option } from "~/components/InputSelect";
@@ -258,7 +260,7 @@ function Security() {
             options={userRoleOptions}
             onChange={handleDefaultRoleChange}
             label={t("Default role")}
-            hideLabel
+            labelHidden
             short
           />
         </SettingRow>
@@ -306,19 +308,21 @@ function Security() {
           onChange={handleViewersCanExportChange}
         />
       </SettingRow>
-      <SettingRow
-        label={t("Users can delete account")}
-        name={TeamPreference.MembersCanDeleteAccount}
-        description={t(
-          "When enabled, users can delete their own account from the workspace"
-        )}
-      >
-        <Switch
-          id={TeamPreference.MembersCanDeleteAccount}
-          checked={team.getPreference(TeamPreference.MembersCanDeleteAccount)}
-          onChange={handleMembersCanDeleteAccountChange}
-        />
-      </SettingRow>
+      {env.AUTH_TYPE !== AUTH_TYPE_SSO && (
+        <SettingRow
+          label={t("Users can delete account")}
+          name={TeamPreference.MembersCanDeleteAccount}
+          description={t(
+            "When enabled, users can delete their own account from the workspace"
+          )}
+        >
+          <Switch
+            id={TeamPreference.MembersCanDeleteAccount}
+            checked={team.getPreference(TeamPreference.MembersCanDeleteAccount)}
+            onChange={handleMembersCanDeleteAccountChange}
+          />
+        </SettingRow>
+      )}
       <SettingRow
         label={t("Email address visibility")}
         name={TeamPreference.EmailDisplay}
@@ -331,7 +335,7 @@ function Security() {
           options={emailDisplayOptions}
           onChange={handleEmailDisplayChange}
           label={t("Email address visibility")}
-          hideLabel
+          labelHidden
           short
         />
       </SettingRow>

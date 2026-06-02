@@ -38,8 +38,6 @@ import {
   presentFileOperation,
 } from "@server/presenters";
 import type { APIContext } from "@server/types";
-import { CacheHelper } from "@server/utils/CacheHelper";
-import { RedisPrefixHelper } from "@server/utils/RedisPrefixHelper";
 import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import { collectionIndexing } from "@server/utils/indexing";
 import pagination from "../middlewares/pagination";
@@ -50,6 +48,7 @@ const router = new Router();
 
 router.post(
   "collections.create",
+  rateLimiter(RateLimiterStrategy.TwentyFivePerMinute),
   auth(),
   validate(T.CollectionsCreateSchema),
   transaction(),
@@ -66,6 +65,7 @@ router.post(
       sort,
       index,
       commenting,
+      templateManagement,
     } = ctx.input.body;
 
     const { user } = ctx.state.auth;
@@ -84,6 +84,7 @@ router.post(
       sort,
       index,
       commenting,
+      templateManagement,
     });
 
     if (data) {
@@ -143,18 +144,7 @@ router.post(
 
     authorize(user, "readDocument", collection);
 
-    const documentStructure = await CacheHelper.getDataOrSet(
-      RedisPrefixHelper.getCollectionDocumentsKey(collection.id),
-      async () =>
-        (
-          await Collection.findByPk(collection.id, {
-            attributes: ["documentStructure"],
-            includeDocumentStructure: true,
-            rejectOnEmpty: true,
-          })
-        ).documentStructure,
-      60
-    );
+    const documentStructure = await collection.getCachedDocumentStructure();
 
     ctx.body = {
       data: documentStructure || [],
@@ -589,6 +579,7 @@ router.post(
       sort,
       sharing,
       commenting,
+      templateManagement,
     } = ctx.input.body;
 
     const { user } = ctx.state.auth;
@@ -673,6 +664,10 @@ router.post(
 
     if (commenting !== undefined) {
       collection.commenting = commenting;
+    }
+
+    if (templateManagement !== undefined) {
+      collection.templateManagement = templateManagement;
     }
 
     await collection.saveWithCtx(ctx);
@@ -858,31 +853,7 @@ router.post(
 
     authorize(user, "archive", collection);
 
-    collection.archivedAt = new Date();
-    collection.archivedById = user.id;
-    collection.archivedBy = user;
-
-    await collection.saveWithCtx(ctx, undefined, {
-      name: "archive",
-    });
-
-    // Archive all documents within the collection
-    await Document.update(
-      {
-        lastModifiedById: user.id,
-        archivedAt: collection.archivedAt,
-      },
-      {
-        where: {
-          teamId: collection.teamId,
-          collectionId: collection.id,
-          archivedAt: {
-            [Op.is]: null,
-          },
-        },
-        transaction,
-      }
-    );
+    await collection.archiveWithCtx(ctx);
 
     ctx.body = {
       data: await presentCollection(ctx, collection),

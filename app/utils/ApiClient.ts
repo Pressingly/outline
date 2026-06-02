@@ -1,6 +1,7 @@
 import retry from "fetch-retry";
 import trim from "lodash/trim";
 import queryString from "query-string";
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import EDITOR_VERSION from "@shared/editor/version";
 import type { JSONObject } from "@shared/types";
 import { Scope } from "@shared/types";
@@ -48,6 +49,7 @@ class ApiClient {
   shareId?: string;
 
   /** Map of in-flight POST requests for deduplication, keyed by path + body. */
+  // oxlint-disable-next-line no-explicit-any
   private inflightRequests = new Map<string, Promise<any>>();
 
   constructor(options: Options = {}) {
@@ -58,6 +60,7 @@ class ApiClient {
     this.shareId = shareId;
   };
 
+  // oxlint-disable-next-line no-explicit-any
   fetch = async <T = any>(
     path: string,
     method: string,
@@ -79,7 +82,7 @@ class ApiClient {
 
     if (method === "GET") {
       if (data) {
-        modifiedPath = `${path}?${data && queryString.stringify(data)}`;
+        modifiedPath = `${path}?${queryString.stringify(data)}`;
       } else {
         modifiedPath = path;
       }
@@ -94,7 +97,7 @@ class ApiClient {
         // toggling Content-Type to application/json
         if (
           typeof data === "object" &&
-          (data || "").toString() === "[object Object]"
+          Object.prototype.toString.call(data) === "[object Object]"
         ) {
           body = JSON.stringify(data);
         }
@@ -201,7 +204,7 @@ class ApiClient {
     // Either signal is sufficient. Both can be true together but only
     // the first qualifying detection matters since wipeAndReload is
     // idempotent.
-    if (env.AUTH_TYPE === "SSO") {
+    if (env.AUTH_TYPE === AUTH_TYPE_SSO) {
       const contentType = response.headers.get("content-type") || "";
       const finalUrlOffApi = !response.url.includes("/api/");
       const wasRedirected = response.redirected && finalUrlOffApi;
@@ -242,7 +245,7 @@ class ApiClient {
     // Handle 401, log out user
     if (response.status === 401) {
       if (!this.shareId) {
-        if (env.AUTH_TYPE === "SSO") {
+        if (env.AUTH_TYPE === AUTH_TYPE_SSO) {
           // In ForwardAuth mode, the stale JWT cookie has been cleared by the
           // server. Navigate to the current URL so the browser makes a fresh
           // HTTP request — the proxy will inject new identity headers and a new
@@ -280,7 +283,7 @@ class ApiClient {
     const error: {
       message?: string;
       error?: string;
-      data?: Record<string, any>;
+      data?: Record<string, unknown>;
     } = {};
 
     try {
@@ -310,6 +313,7 @@ class ApiClient {
         await stores.auth.logout({
           savePath: false,
           revokeToken: false,
+          clearCache: true,
         });
       }
 
@@ -350,15 +354,17 @@ class ApiClient {
     throw err;
   };
 
+  // oxlint-disable-next-line no-explicit-any
   get = <T = any>(
     path: string,
     data: JSONObject | undefined,
     options?: FetchOptions
   ) => this.fetch<T>(path, "GET", data, options);
 
+  // oxlint-disable-next-line no-explicit-any
   post = <T = any>(
     path: string,
-    data?: JSONObject | FormData | undefined,
+    data?: JSONObject | FormData,
     options?: FetchOptions
   ): Promise<T> => {
     if (data instanceof FormData) {

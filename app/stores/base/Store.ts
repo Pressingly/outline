@@ -44,6 +44,7 @@ export type PaginatedResponse<T> = T[] & {
   };
 };
 
+// oxlint-disable-next-line no-explicit-any
 export type FetchPageParams = PaginationParams & Record<string, any>;
 
 export default abstract class Store<T extends Model> {
@@ -59,6 +60,7 @@ export default abstract class Store<T extends Model> {
   @observable
   isLoaded = false;
 
+  // oxlint-disable-next-line no-explicit-any
   requests: Map<string, Promise<any>> = new Map();
 
   model: typeof Model;
@@ -401,7 +403,7 @@ export default abstract class Store<T extends Model> {
 
   @action
   fetchPage = async (
-    params?: FetchPageParams | undefined
+    params?: FetchPageParams
   ): Promise<PaginatedResponse<T>> => {
     if (!this.actions.includes(RPCAction.List)) {
       throw new Error(`Cannot list ${this.modelName}`);
@@ -430,6 +432,7 @@ export default abstract class Store<T extends Model> {
 
   @action
   fetchAll = async (
+    // oxlint-disable-next-line no-explicit-any
     params?: Record<string, any>
   ): Promise<PaginatedResponse<T>> => {
     const limit = params?.limit ?? Pagination.defaultLimit;
