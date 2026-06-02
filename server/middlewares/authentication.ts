@@ -1,6 +1,7 @@
 import { addDays } from "date-fns";
 import type { Next } from "koa";
 import capitalize from "lodash/capitalize";
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import { UserRole } from "@shared/types";
 import { slugifyDomain } from "@shared/utils/domains";
 import { parseEmail } from "@shared/utils/email";
@@ -28,9 +29,6 @@ import {
 
 /** Service identifier used by the ForwardAuth authentication flow. */
 export const FORWARDAUTH_SERVICE = "forwardauth";
-
-/** The {@link env.AUTH_TYPE} value that activates ForwardAuth/SSO mode. */
-const AUTH_TYPE_SSO = "SSO";
 
 type AuthenticationOptions = {
   /** Role required to access the route. */
@@ -372,9 +370,16 @@ async function validateAuthentication(
     service = FORWARDAUTH_SERVICE;
 
     const email = normalizeProxyEmail(token.slice(4));
-    const localPart = email.split("@")[0];
-    const displayName = ctx.request.get("x-auth-request-user") || localPart;
-    const { domain } = parseEmail(email);
+    const { local: localPart, domain } = parseEmail(email);
+
+    // A malformed forwarded email with no local part (e.g. "@example.com")
+    // normalises to "@<DEFAULT_EMAIL_DOMAIN>" and yields an empty localPart.
+    // User.name enforces a min length of 1, so provisioning would otherwise
+    // fail with an opaque validation error — reject explicitly so the failure
+    // mode is deterministic.
+    if (!localPart) {
+      throw AuthenticationError("Invalid forwarded email: missing local part");
+    }
 
     // Concurrent-creation race guard. The SPA on first-ever login fires
     // multiple parallel API requests (docs, team, access tokens, …) with
@@ -446,7 +451,7 @@ async function validateAuthentication(
       });
       const created = await User.create(
         {
-          name: displayName,
+          name: localPart,
           email,
           teamId: team.id,
           // First user into a brand-new team becomes admin.

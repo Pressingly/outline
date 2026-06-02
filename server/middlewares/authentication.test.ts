@@ -1,4 +1,5 @@
 import type { DefaultState } from "koa";
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import { randomString } from "@shared/random";
 import { Scope } from "@shared/types";
 import env from "@server/env";
@@ -417,7 +418,7 @@ describe("Authentication middleware", () => {
 
   describe("with ForwardAuth headers", () => {
     beforeEach(() => {
-      env.AUTH_TYPE = "SSO";
+      env.AUTH_TYPE = AUTH_TYPE_SSO;
     });
 
     afterEach(() => {
@@ -510,9 +511,6 @@ describe("Authentication middleware", () => {
               if (header === "x-auth-request-email") {
                 return newEmail;
               }
-              if (header === "x-auth-request-user") {
-                return "New User";
-              }
               return "";
             }),
           },
@@ -529,36 +527,6 @@ describe("Authentication middleware", () => {
         where: { email: newEmail.toLowerCase() },
       });
       expect(provisioned).not.toBeNull();
-      expect(state.auth.user.email).toEqual(newEmail.toLowerCase());
-      expect(state.auth.user.name).toEqual("New User");
-    });
-
-    it("should use email prefix as name when X-Auth-Request-User is absent", async () => {
-      await buildTeam();
-      const state = {} as DefaultState;
-      const authMiddleware = auth();
-      const newEmail = `prefix-${randomString(6)}@example.com`;
-
-      await authMiddleware(
-        {
-          // @ts-expect-error mock request
-          request: {
-            get: jest.fn((header: string) => {
-              if (header === "x-auth-request-email") {
-                return newEmail;
-              }
-              return "";
-            }),
-          },
-          // @ts-expect-error mock cookies
-          cookies: { get: jest.fn(() => undefined), set: jest.fn() },
-          state,
-          ip: "127.0.0.1",
-          cache: {},
-        },
-        jest.fn()
-      );
-
       expect(state.auth.user.email).toEqual(newEmail.toLowerCase());
       expect(state.auth.user.name).toEqual(
         newEmail.toLowerCase().split("@")[0]
@@ -598,6 +566,37 @@ describe("Authentication middleware", () => {
       } finally {
         env.DEFAULT_EMAIL_DOMAIN = savedDomain;
       }
+    });
+
+    it("should reject a forwarded email with no local part", async () => {
+      await buildTeam();
+      const state = {} as DefaultState;
+      const authMiddleware = auth();
+
+      // "@example.com" normalises to "@<DEFAULT_EMAIL_DOMAIN>" with an empty
+      // local part. User.name enforces min length 1, so we reject up front
+      // rather than letting provisioning fail with an opaque validation error.
+      await expect(
+        authMiddleware(
+          {
+            // @ts-expect-error mock request
+            request: {
+              get: jest.fn((header: string) => {
+                if (header === "x-auth-request-email") {
+                  return "@example.com";
+                }
+                return "";
+              }),
+            },
+            // @ts-expect-error mock cookies
+            cookies: { get: jest.fn(() => undefined), set: jest.fn() },
+            state,
+            ip: "127.0.0.1",
+            cache: {},
+          },
+          jest.fn()
+        )
+      ).rejects.toThrow("Invalid forwarded email: missing local part");
     });
 
     it("should not match existing users via SQL LIKE wildcard characters", async () => {

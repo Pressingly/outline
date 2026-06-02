@@ -1,5 +1,7 @@
 import { faker } from "@faker-js/faker";
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import { TeamPreference, UserRole } from "@shared/types";
+import env from "@server/env";
 import ConfirmUpdateEmail from "@server/emails/templates/ConfirmUpdateEmail";
 import { TeamDomain } from "@server/models";
 import {
@@ -645,6 +647,71 @@ describe("#users.delete", () => {
       },
     });
     expect(res.status).toEqual(200);
+  });
+
+  describe("when AUTH_TYPE is SSO", () => {
+    let originalAuthType: string | undefined;
+
+    beforeEach(() => {
+      originalAuthType = env.AUTH_TYPE;
+      env.AUTH_TYPE = AUTH_TYPE_SSO;
+    });
+
+    afterEach(() => {
+      env.AUTH_TYPE = originalAuthType;
+    });
+
+    it("should not allow users to delete their own account", async () => {
+      const user = await buildUser();
+      await buildUser({
+        teamId: user.teamId,
+      });
+      const res = await server.post("/api/users.delete", {
+        body: {
+          code: user.deleteConfirmationCode,
+          token: user.getJwtToken(),
+        },
+      });
+      expect(res.status).toEqual(403);
+    });
+
+    it("should not allow admins to delete their own account", async () => {
+      const admin = await buildAdmin();
+      await buildUser({
+        teamId: admin.teamId,
+      });
+      const res = await server.post("/api/users.delete", {
+        body: {
+          code: admin.deleteConfirmationCode,
+          token: admin.getJwtToken(),
+        },
+      });
+      expect(res.status).toEqual(403);
+    });
+
+    it("should not allow users to request their own deletion", async () => {
+      const user = await buildUser();
+      const res = await server.post("/api/users.requestDelete", {
+        body: {
+          token: user.getJwtToken(),
+        },
+      });
+      expect(res.status).toEqual(403);
+    });
+
+    it("should still allow admins to delete other users", async () => {
+      const admin = await buildAdmin();
+      const user = await buildUser({
+        teamId: admin.teamId,
+      });
+      const res = await server.post("/api/users.delete", {
+        body: {
+          id: user.id,
+          token: admin.getJwtToken(),
+        },
+      });
+      expect(res.status).toEqual(200);
+    });
   });
 
   it("should require authentication", async () => {
