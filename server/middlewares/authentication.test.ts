@@ -568,6 +568,37 @@ describe("Authentication middleware", () => {
       }
     });
 
+    it("should reject a forwarded email with no local part", async () => {
+      await buildTeam();
+      const state = {} as DefaultState;
+      const authMiddleware = auth();
+
+      // "@example.com" normalises to "@<DEFAULT_EMAIL_DOMAIN>" with an empty
+      // local part. User.name enforces min length 1, so we reject up front
+      // rather than letting provisioning fail with an opaque validation error.
+      await expect(
+        authMiddleware(
+          {
+            // @ts-expect-error mock request
+            request: {
+              get: jest.fn((header: string) => {
+                if (header === "x-auth-request-email") {
+                  return "@example.com";
+                }
+                return "";
+              }),
+            },
+            // @ts-expect-error mock cookies
+            cookies: { get: jest.fn(() => undefined), set: jest.fn() },
+            state,
+            ip: "127.0.0.1",
+            cache: {},
+          },
+          jest.fn()
+        )
+      ).rejects.toThrow("Invalid forwarded email: missing local part");
+    });
+
     it("should not match existing users via SQL LIKE wildcard characters", async () => {
       const team = await buildTeam();
       const existingUser = await buildUser({ teamId: team.id });
