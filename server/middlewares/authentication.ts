@@ -258,6 +258,46 @@ function normalizeProxyEmail(raw: string): string {
     : `${trimmed.split("@")[0]}@${env.DEFAULT_EMAIL_DOMAIN}`;
 }
 
+/**
+ * Verify that the caller's mPass access token carries a `custom:corporate_id`
+ * matching this deployment's `SMB_CORPORATE_ID`. When the env var is empty the
+ * check is skipped entirely (backward-compatible default).
+ *
+ * @param ctx - koa request context forwarded by oauth2-proxy.
+ */
+function checkCorporateId(ctx: AppContext): void {
+  const expectedCorporateId = env.SMB_CORPORATE_ID;
+  if (!expectedCorporateId) {
+    return;
+  }
+
+  const accessToken = ctx.request.get("x-auth-request-access-token");
+  if (!accessToken) {
+    throw AuthenticationError("Access denied: missing access token");
+  }
+
+  try {
+    // Decode JWT payload without verification — oauth2-proxy already verified
+    // the signature before forwarding the request.
+    const payloadB64 = accessToken.split(".")[1];
+    const payload = JSON.parse(
+      Buffer.from(payloadB64, "base64url").toString()
+    );
+
+    if (payload["custom:is_corporate"] !== "true") {
+      throw AuthenticationError("Access denied: not a corporate account");
+    }
+    if (payload["custom:corporate_id"] !== expectedCorporateId) {
+      throw AuthenticationError("Access denied: corporate ID mismatch");
+    }
+  } catch (e) {
+    if (e instanceof Error && "statusCode" in e) {
+      throw e;
+    }
+    throw AuthenticationError("Access denied: invalid access token");
+  }
+}
+
 async function validateAuthentication(
   ctx: AppContext,
   options: AuthenticationOptions
@@ -370,6 +410,7 @@ async function validateAuthentication(
     service = FORWARDAUTH_SERVICE;
 
     const email = normalizeProxyEmail(token.slice(4));
+    checkCorporateId(ctx);
     const { local: localPart, domain } = parseEmail(email);
 
     // A malformed forwarded email with no local part (e.g. "@example.com")
