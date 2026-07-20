@@ -853,6 +853,14 @@ export class Environment {
   public SMB_NAME = environment.SMB_NAME ?? "moneta";
 
   /**
+   * The corporate ID for this deployment. When set, the authentication
+   * middleware rejects users whose mPass access token does not carry a
+   * matching `custom:corporate_id` claim.
+   */
+  @IsOptional()
+  public SMB_CORPORATE_ID = environment.SMB_CORPORATE_ID ?? "";
+
+  /**
    * Gravity constant for time decay in popularity scoring. Higher values cause
    * faster decay of older content. Default is 0.7.
    */
