@@ -9,6 +9,7 @@ import { UserFlag } from "@server/models/User";
 import type { APIContext } from "@server/types";
 import { DomainNotAllowedError } from "@server/errors";
 import { can } from "@server/policies";
+import { Op, fn, col, where as sqlWhere } from "sequelize";
 
 export type Invite = {
   name: string;
@@ -55,14 +56,22 @@ export default async function userInviter(
     }
   }
 
+  // Matched on lower(email), not the raw column: auth providers may capitalize
+  // an address (see userProvisioner), so a stored `Foo@example.com` would be
+  // invisible to an equality test against the lowercased invite list. The
+  // users_team_id_email_unique index keys on lower(email), so missing one here
+  // means the create below raises a constraint violation instead of the address
+  // landing in the `existing` bucket where it belongs.
   const existingUsers = await User.findAll({
     where: {
       teamId: user.teamId,
-      email: emails,
+      [Op.and]: [sqlWhere(fn("lower", col("email")), { [Op.in]: emails })],
     },
   });
-  const existingEmails = existingUsers.map(
-    (existingUser) => existingUser.email
+  // `emails` is already lowercased above, so only the stored side needs
+  // normalizing for the membership test below.
+  const existingEmails = existingUsers.map((existingUser) =>
+    existingUser.email?.toLowerCase()
   );
   const [existingInvites, filteredInvites] = partition(
     normalizedInvites,

@@ -1,5 +1,5 @@
 import type { InferCreationAttributes } from "sequelize";
-import { Op } from "sequelize";
+import { Op, UniqueConstraintError } from "sequelize";
 import type { UserRole } from "@shared/types";
 import InviteAcceptedEmail from "@server/emails/templates/InviteAcceptedEmail";
 import {
@@ -54,7 +54,12 @@ type Props = {
 
 export default async function userProvisioner(
   ctx: APIContext,
-  { name, email, role, language, avatarUrl, teamId, authentication }: Props
+  { name, email, role, language, avatarUrl, teamId, authentication }: Props,
+  /**
+   * Internal. Set once when a concurrent sign-in won the race to create this
+   * email, so the retry below can never loop: a second conflict rethrows.
+   */
+  retriedAfterConflict = false
 ): Promise<UserProvisionerResult> {
   const auth = authentication
     ? await UserAuthentication.findOne({
@@ -229,24 +234,44 @@ export default async function userProvisioner(
       throw DomainNotAllowedError();
     }
 
-    const user = await User.createWithCtx(
-      ctx,
-      {
-        name,
-        email,
-        language,
-        role: role ?? team?.defaultUserRole,
-        teamId,
-        avatarUrl,
-        authentications: authentication ? [authentication] : [],
-        lastActiveAt: new Date(),
-        lastActiveIp: ctx.ip,
-      } as Partial<InferCreationAttributes<User>>,
-      undefined,
-      {
-        include: "authentications",
+    let user: User;
+    try {
+      user = await User.createWithCtx(
+        ctx,
+        {
+          name,
+          email,
+          language,
+          role: role ?? team?.defaultUserRole,
+          teamId,
+          avatarUrl,
+          authentications: authentication ? [authentication] : [],
+          lastActiveAt: new Date(),
+          lastActiveIp: ctx.ip,
+        } as Partial<InferCreationAttributes<User>>,
+        undefined,
+        {
+          include: "authentications",
+        }
+      );
+    } catch (err) {
+      // Two concurrent sign-ins for the same new address both pass the iLike
+      // check above (neither row is committed yet) and both reach this create.
+      // The unique index on ("teamId", lower(email)) means the loser now fails
+      // here instead of quietly creating a second account — but failing is not
+      // the answer for them either: they are the same person, and a 500 on the
+      // login path is worse than the duplicate this index exists to prevent.
+      // Re-read the row the winner just committed and continue as that user.
+      if (!(err instanceof UniqueConstraintError) || retriedAfterConflict) {
+        throw err;
       }
-    );
+      await transaction.rollback();
+      return userProvisioner(
+        ctx,
+        { name, email, role, language, avatarUrl, teamId, authentication },
+        true
+      );
+    }
     await transaction.commit();
     return {
       user,
