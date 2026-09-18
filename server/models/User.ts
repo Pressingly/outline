@@ -9,7 +9,7 @@ import type {
   InferAttributes,
   InferCreationAttributes,
 } from "sequelize";
-import { QueryTypes, Op } from "sequelize";
+import { QueryTypes, Op, fn, col, where as sqlWhere } from "sequelize";
 import { type InstanceUpdateOptions } from "sequelize";
 import {
   Table,
@@ -925,15 +925,17 @@ class User extends ParanoidModel<
     return this.findOne({
       where: {
         teamId: ctx.state.auth.user.teamId,
-        // Case-insensitive on the COLUMN, not just the input. Auth providers may
-        // capitalize the address (see userProvisioner), so a stored
-        // `Foo@example.com` is invisible to an equality test against a
-        // lowercased argument -- and the users_team_id_email_unique index keys
-        // on lower(email), so a caller that trusted this check would then hit a
+        // Compared as lower(email), matching users_team_id_email_unique exactly.
+        // Auth providers may capitalize the address (see userProvisioner), so a
+        // stored `Foo@example.com` is invisible to an equality test against a
+        // lowercased argument, and a caller trusting this check would hit a
         // constraint violation instead of the ValidationError it meant to raise.
-        email: {
-          [Op.iLike]: email.trim(),
-        },
+        //
+        // Not Op.iLike: `_` and `%` are LIKE wildcards and are both legal in an
+        // address, so `foo_bar@example.com` would match `fooXbar@example.com`.
+        [Op.and]: [
+          sqlWhere(fn("lower", col("email")), email.trim().toLowerCase()),
+        ],
       },
       ...ctx.context,
     });
