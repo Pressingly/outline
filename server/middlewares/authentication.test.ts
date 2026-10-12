@@ -936,7 +936,7 @@ describe("Authentication middleware", () => {
         );
         expect(true).toBe(false); // should not reach here
       } catch (e) {
-        expect(e.message).toEqual("Authentication required");
+        expect(errToString(e)).toEqual("Authentication required");
       }
     });
   });
