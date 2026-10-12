@@ -2,6 +2,7 @@ import { addDays } from "date-fns";
 import type { Next } from "koa";
 import { capitalize } from "es-toolkit/compat";
 import httpErrors from "http-errors";
+import type { HttpError } from "http-errors";
 import { AUTH_TYPE_SSO } from "@shared/constants";
 import { UserRole } from "@shared/types";
 import { slugifyDomain } from "@shared/utils/domains";
@@ -114,55 +115,33 @@ export default function auth(options: AuthenticationOptions = {}) {
         );
       }
     } catch (err) {
-      const epoch = "Thu, 01 Jan 1970 00:00:00 GMT";
+      if (httpErrors.isHttpError(err)) {
+        // Stale-session redirect. Convert into a 302 with Location pointing
+        // to /home and expire the stale session cookies. Browser / fetch
+        // auto-follow the redirect with the cleared cookies, which lands on
+        // the ForwardAuth `fwd:` header path and issues a fresh JWT, so no
+        // 401 surfaces to the SPA.
+        //
+        // err.headers is the only way to carry Set-Cookie + Location through
+        // Koa's onerror handler: response headers are stripped on error, then
+        // only err.headers are re-applied. ctx.cookies.set() cannot be used.
+        if (err.status === 302 && err.redirectTo) {
+          throw withExpiredSessionCookies(err, { Location: err.redirectTo });
+        }
 
-      // Stale-session redirect. Convert into a 302 with Location
-      // pointing to /home, plus Set-Cookie headers expiring the stale
-      // accessToken + lastSignedIn cookies. Browser / fetch auto-
-      // follow the redirect with the cleared cookies, which lands on
-      // the ForwardAuth `fwd:` header path and issues a fresh JWT —
-      // no 401 surfaces to the SPA.
-      //
-      // err.headers is the only way to carry Set-Cookie + Location
-      // through Koa's onerror handler (see Koa's context.js:139-146 —
-      // response headers are stripped on error, then only err.headers
-      // are re-applied).
-      if (err.status === 302 && err.redirectTo) {
-        err.headers = {
-          ...err.headers,
-          "set-cookie": [
-            `accessToken=; expires=${epoch}; path=/`,
-            `lastSignedIn=; expires=${epoch}; path=/`,
-          ],
-          Location: err.redirectTo,
-        };
-        throw err;
+        // If a cookie-transported JWT caused the 401, clear it so the browser
+        // stops sending it. On the next request ForwardAuth headers take over
+        // and a fresh session is issued.
+        if (
+          err.status === 401 &&
+          parseAuthentication(ctx).transport === "cookie" &&
+          !ctx.request.get("authorization") &&
+          ctx.cookies.get("accessToken")
+        ) {
+          withExpiredSessionCookies(err);
+        }
       }
 
-      // If a cookie-transported JWT caused the 401, clear it so the browser
-      // stops sending it. On the next request ForwardAuth headers take over
-      // and a fresh session is issued. Only clear when the cookie was the
-      // active transport (no Authorization: Bearer header present).
-      //
-      // IMPORTANT: ctx.cookies.set() cannot be used here — Koa's onerror
-      // handler strips all response headers before sending the error response,
-      // then re-applies only err.headers (context.js:139-146). Attaching the
-      // Set-Cookie directives to the error object is the only way they survive.
-      const authInput = parseAuthentication(ctx);
-      if (
-        err.status === 401 &&
-        authInput.transport === "cookie" &&
-        !ctx.request.get("authorization") &&
-        ctx.cookies.get("accessToken")
-      ) {
-        err.headers = {
-          ...err.headers,
-          "set-cookie": [
-            `accessToken=; expires=${epoch}; path=/`,
-            `lastSignedIn=; expires=${epoch}; path=/`,
-          ],
-        };
-      }
       // Credentials that are valid but insufficient are always surfaced,
       // otherwise the request would be silently downgraded to anonymous.
       if (options.optional && !(err instanceof httpErrors.Forbidden)) {
@@ -174,6 +153,34 @@ export default function auth(options: AuthenticationOptions = {}) {
 
     return next();
   };
+}
+
+const EXPIRED_SESSION_COOKIES = [
+  "accessToken=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/",
+  "lastSignedIn=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/",
+];
+
+/**
+ * Attaches Set-Cookie directives expiring the session cookies to an error, so
+ * they survive Koa's error handler. Object.assign is used because the
+ * http-errors typings only allow string header values, while Koa accepts the
+ * string array needed for multiple Set-Cookie headers.
+ *
+ * @param err the error being thrown from the middleware.
+ * @param extraHeaders additional headers to attach.
+ * @returns the same error, carrying the extra headers.
+ */
+function withExpiredSessionCookies(
+  err: HttpError,
+  extraHeaders: Record<string, string> = {}
+) {
+  return Object.assign(err, {
+    headers: {
+      ...err.headers,
+      "set-cookie": EXPIRED_SESSION_COOKIES,
+      ...extraHeaders,
+    },
+  });
 }
 
 /**
