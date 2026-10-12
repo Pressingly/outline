@@ -1,8 +1,19 @@
-import { FileOperationState, FileOperationType } from "@shared/types";
-import { Collection, User, Event, FileOperation } from "@server/models";
+import {
+  CollectionPermission,
+  FileOperationState,
+  FileOperationType,
+} from "@shared/types";
+import {
+  Collection,
+  User,
+  Event,
+  FileOperation,
+  UserMembership,
+} from "@server/models";
 import {
   buildAdmin,
   buildCollection,
+  buildDocument,
   buildFileOperation,
   buildTeam,
   buildUser,
@@ -12,7 +23,7 @@ import { getTestServer } from "@server/test/support";
 
 const server = getTestServer();
 
-jest.mock("@server/storage/files");
+vi.mock("@server/storage/files");
 
 describe("#fileOperations.info", () => {
   it("should return fileOperation", async () => {
@@ -25,10 +36,9 @@ describe("#fileOperations.info", () => {
       teamId: team.id,
       userId: admin.id,
     });
-    const res = await server.post("/api/fileOperations.info", {
+    const res = await server.post("/api/fileOperations.info", admin, {
       body: {
         id: exportData.id,
-        token: admin.getJwtToken(),
       },
     });
     const body = await res.json();
@@ -40,20 +50,58 @@ describe("#fileOperations.info", () => {
   it("should allow user to read their own export", async () => {
     const team = await buildTeam();
     const user = await buildUser({ teamId: team.id });
+    const collection = await buildCollection({ teamId: team.id });
     const exportData = await buildFileOperation({
       type: FileOperationType.Export,
       teamId: team.id,
       userId: user.id,
+      collectionId: collection.id,
     });
-    const res = await server.post("/api/fileOperations.info", {
+    const res = await server.post("/api/fileOperations.info", user, {
       body: {
         id: exportData.id,
-        token: user.getJwtToken(),
       },
     });
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data.id).toBe(exportData.id);
+  });
+
+  it("should not allow user to read their own export of a collection they lost access to", async () => {
+    const team = await buildTeam();
+    const user = await buildUser({ teamId: team.id });
+    const collection = await buildCollection({
+      teamId: team.id,
+      permission: null,
+    });
+    const exportData = await buildFileOperation({
+      type: FileOperationType.Export,
+      teamId: team.id,
+      userId: user.id,
+      collectionId: collection.id,
+    });
+    const res = await server.post("/api/fileOperations.info", user, {
+      body: {
+        id: exportData.id,
+      },
+    });
+    expect(res.status).toEqual(403);
+  });
+
+  it("should not allow demoted admin to read their own workspace export", async () => {
+    const team = await buildTeam();
+    const user = await buildUser({ teamId: team.id });
+    const exportData = await buildFileOperation({
+      type: FileOperationType.Export,
+      teamId: team.id,
+      userId: user.id,
+    });
+    const res = await server.post("/api/fileOperations.info", user, {
+      body: {
+        id: exportData.id,
+      },
+    });
+    expect(res.status).toEqual(403);
   });
 
   it("should not allow user to read another user's export", async () => {
@@ -65,10 +113,9 @@ describe("#fileOperations.info", () => {
       teamId: team.id,
       userId: admin.id,
     });
-    const res = await server.post("/api/fileOperations.info", {
+    const res = await server.post("/api/fileOperations.info", user, {
       body: {
         id: exportData.id,
-        token: user.getJwtToken(),
       },
     });
     expect(res.status).toEqual(403);
@@ -83,10 +130,9 @@ describe("#fileOperations.info", () => {
       teamId: team.id,
       userId: admin1.id,
     });
-    const res = await server.post("/api/fileOperations.info", {
+    const res = await server.post("/api/fileOperations.info", admin2, {
       body: {
         id: exportData.id,
-        token: admin2.getJwtToken(),
       },
     });
     const body = await res.json();
@@ -103,10 +149,9 @@ describe("#fileOperations.info", () => {
       teamId: team.id,
       userId: admin1.id,
     });
-    const res = await server.post("/api/fileOperations.info", {
+    const res = await server.post("/api/fileOperations.info", admin2, {
       body: {
         id: importOp.id,
-        token: admin2.getJwtToken(),
       },
     });
     const body = await res.json();
@@ -125,10 +170,9 @@ describe("#fileOperations.info", () => {
       teamId: team.id,
       userId: admin.id,
     });
-    const res = await server.post("/api/fileOperations.info", {
+    const res = await server.post("/api/fileOperations.info", admin, {
       body: {
         id: exportData.id,
-        token: admin.getJwtToken(),
       },
     });
     expect(res.status).toEqual(403);
@@ -146,9 +190,8 @@ describe("#fileOperations.list", () => {
       teamId: team.id,
       userId: admin.id,
     });
-    const res = await server.post("/api/fileOperations.list", {
+    const res = await server.post("/api/fileOperations.list", admin, {
       body: {
-        token: admin.getJwtToken(),
         type: FileOperationType.Export,
       },
     });
@@ -176,9 +219,8 @@ describe("#fileOperations.list", () => {
       userId: admin.id,
       collectionId: collection.id,
     });
-    const res = await server.post("/api/fileOperations.list", {
+    const res = await server.post("/api/fileOperations.list", admin, {
       body: {
-        token: admin.getJwtToken(),
         type: FileOperationType.Export,
       },
     });
@@ -210,9 +252,8 @@ describe("#fileOperations.list", () => {
     await collection.destroy({ hooks: false });
     const isCollectionPresent = await Collection.findByPk(collection.id);
     expect(isCollectionPresent).toBe(null);
-    const res = await server.post("/api/fileOperations.list", {
+    const res = await server.post("/api/fileOperations.list", admin, {
       body: {
-        token: admin.getJwtToken(),
         type: FileOperationType.Export,
       },
     });
@@ -247,9 +288,8 @@ describe("#fileOperations.list", () => {
     await admin.destroy();
     const isAdminPresent = await User.findByPk(admin.id);
     expect(isAdminPresent).toBe(null);
-    const res = await server.post("/api/fileOperations.list", {
+    const res = await server.post("/api/fileOperations.list", admin2, {
       body: {
-        token: admin2.getJwtToken(),
         type: FileOperationType.Export,
       },
     });
@@ -265,9 +305,8 @@ describe("#fileOperations.list", () => {
 
   it("should require admin", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/fileOperations.list", {
+    const res = await server.post("/api/fileOperations.list", user, {
       body: {
-        token: user.getJwtToken(),
         type: FileOperationType.Export,
       },
     });
@@ -286,9 +325,8 @@ describe("#fileOperations.redirect", () => {
       teamId: team.id,
       userId: admin.id,
     });
-    const res = await server.post("/api/fileOperations.redirect", {
+    const res = await server.post("/api/fileOperations.redirect", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: exportData.id,
       },
     });
@@ -307,9 +345,8 @@ describe("#fileOperations.redirect", () => {
       teamId: team.id,
       userId: admin1.id,
     });
-    const res = await server.post("/api/fileOperations.redirect", {
+    const res = await server.post("/api/fileOperations.redirect", admin2, {
       body: {
-        token: admin2.getJwtToken(),
         id: exportData.id,
       },
       redirect: "manual",
@@ -320,20 +357,125 @@ describe("#fileOperations.redirect", () => {
   it("should allow user to redirect their own export", async () => {
     const team = await buildTeam();
     const user = await buildUser({ teamId: team.id });
+    const collection = await buildCollection({ teamId: team.id });
     const exportData = await buildFileOperation({
       state: FileOperationState.Complete,
       type: FileOperationType.Export,
       teamId: team.id,
       userId: user.id,
+      collectionId: collection.id,
     });
-    const res = await server.post("/api/fileOperations.redirect", {
+    const res = await server.post("/api/fileOperations.redirect", user, {
       body: {
-        token: user.getJwtToken(),
         id: exportData.id,
       },
       redirect: "manual",
     });
     expect(res.status).toEqual(302);
+  });
+
+  it("should not allow user to redirect their own export of a collection they lost access to", async () => {
+    const team = await buildTeam();
+    const user = await buildUser({ teamId: team.id });
+    const collection = await buildCollection({
+      teamId: team.id,
+      permission: null,
+    });
+    const exportData = await buildFileOperation({
+      state: FileOperationState.Complete,
+      type: FileOperationType.Export,
+      teamId: team.id,
+      userId: user.id,
+      collectionId: collection.id,
+    });
+    const res = await server.post("/api/fileOperations.redirect", user, {
+      body: {
+        id: exportData.id,
+      },
+      redirect: "manual",
+    });
+    expect(res.status).toEqual(403);
+  });
+
+  it("should allow user to redirect their own export of a private collection they are a member of", async () => {
+    const team = await buildTeam();
+    const user = await buildUser({ teamId: team.id });
+    const collection = await buildCollection({
+      teamId: team.id,
+      permission: null,
+    });
+    await UserMembership.create({
+      createdById: user.id,
+      collectionId: collection.id,
+      userId: user.id,
+      permission: CollectionPermission.Admin,
+    });
+    const exportData = await buildFileOperation({
+      state: FileOperationState.Complete,
+      type: FileOperationType.Export,
+      teamId: team.id,
+      userId: user.id,
+      collectionId: collection.id,
+    });
+    const res = await server.post("/api/fileOperations.redirect", user, {
+      body: {
+        id: exportData.id,
+      },
+      redirect: "manual",
+    });
+    expect(res.status).toEqual(302);
+  });
+
+  it("should allow user to redirect their own document export", async () => {
+    const team = await buildTeam();
+    const user = await buildUser({ teamId: team.id });
+    const collection = await buildCollection({ teamId: team.id });
+    const document = await buildDocument({
+      teamId: team.id,
+      userId: user.id,
+      collectionId: collection.id,
+    });
+    const exportData = await buildFileOperation({
+      state: FileOperationState.Complete,
+      type: FileOperationType.Export,
+      teamId: team.id,
+      userId: user.id,
+      documentId: document.id,
+    });
+    const res = await server.post("/api/fileOperations.redirect", user, {
+      body: {
+        id: exportData.id,
+      },
+      redirect: "manual",
+    });
+    expect(res.status).toEqual(302);
+  });
+
+  it("should not allow user to redirect their own document export after losing access", async () => {
+    const team = await buildTeam();
+    const user = await buildUser({ teamId: team.id });
+    const collection = await buildCollection({
+      teamId: team.id,
+      permission: null,
+    });
+    const document = await buildDocument({
+      teamId: team.id,
+      collectionId: collection.id,
+    });
+    const exportData = await buildFileOperation({
+      state: FileOperationState.Complete,
+      type: FileOperationType.Export,
+      teamId: team.id,
+      userId: user.id,
+      documentId: document.id,
+    });
+    const res = await server.post("/api/fileOperations.redirect", user, {
+      body: {
+        id: exportData.id,
+      },
+      redirect: "manual",
+    });
+    expect(res.status).toEqual(403);
   });
 
   it("should not allow user to redirect another user's export", async () => {
@@ -346,9 +488,8 @@ describe("#fileOperations.redirect", () => {
       teamId: team.id,
       userId: admin.id,
     });
-    const res = await server.post("/api/fileOperations.redirect", {
+    const res = await server.post("/api/fileOperations.redirect", user, {
       body: {
-        token: user.getJwtToken(),
         id: exportData.id,
       },
     });
@@ -365,9 +506,8 @@ describe("#fileOperations.redirect", () => {
       teamId: team.id,
       userId: user.id,
     });
-    const res = await server.post("/api/fileOperations.redirect", {
+    const res = await server.post("/api/fileOperations.redirect", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: exportData.id,
       },
     });
@@ -376,7 +516,11 @@ describe("#fileOperations.redirect", () => {
 });
 
 describe("#fileOperations.delete", () => {
-  it("should delete file operation", async () => {
+  it.each([
+    FileOperationState.Complete,
+    FileOperationState.Error,
+    FileOperationState.Expired,
+  ])("should delete %s export file operation", async (state) => {
     const team = await buildTeam();
     const admin = await buildAdmin({
       teamId: team.id,
@@ -385,14 +529,17 @@ describe("#fileOperations.delete", () => {
       type: FileOperationType.Export,
       teamId: team.id,
       userId: admin.id,
-      state: FileOperationState.Complete,
+      state,
     });
-    const deleteResponse = await server.post("/api/fileOperations.delete", {
-      body: {
-        token: admin.getJwtToken(),
-        id: exportData.id,
-      },
-    });
+    const deleteResponse = await server.post(
+      "/api/fileOperations.delete",
+      admin,
+      {
+        body: {
+          id: exportData.id,
+        },
+      }
+    );
     expect(deleteResponse.status).toBe(200);
     expect(
       await Event.count({
@@ -411,6 +558,23 @@ describe("#fileOperations.delete", () => {
     ).toBe(0);
   });
 
+  it("should not delete an export file operation in a non-terminal state", async () => {
+    const team = await buildTeam();
+    const admin = await buildAdmin({ teamId: team.id });
+    const exportData = await buildFileOperation({
+      type: FileOperationType.Export,
+      teamId: team.id,
+      userId: admin.id,
+      state: FileOperationState.Creating,
+    });
+    const res = await server.post("/api/fileOperations.delete", admin, {
+      body: {
+        id: exportData.id,
+      },
+    });
+    expect(res.status).toEqual(403);
+  });
+
   it("should require authorization", async () => {
     const team = await buildTeam();
     const user = await buildUser({ teamId: team.id });
@@ -420,9 +584,8 @@ describe("#fileOperations.delete", () => {
       teamId: team.id,
       userId: user.id,
     });
-    const res = await server.post("/api/fileOperations.delete", {
+    const res = await server.post("/api/fileOperations.delete", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: exportData.id,
       },
     });

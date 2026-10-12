@@ -1,5 +1,5 @@
 import Router from "koa-router";
-import intersection from "lodash/intersection";
+import { intersection } from "es-toolkit/compat";
 import type { WhereOptions } from "sequelize";
 import { Op } from "sequelize";
 import { EventHelper } from "@shared/utils/EventHelper";
@@ -66,6 +66,7 @@ router.post(
     if (documentId) {
       const document = await Document.findByPk(documentId, {
         userId: user.id,
+        includeContent: false,
       });
       authorize(user, "read", document);
       where = { ...where, documentId };
@@ -95,9 +96,7 @@ router.post(
 
     ctx.body = {
       pagination: ctx.state.pagination,
-      data: await Promise.all(
-        loadedEvents.map((event) => presentEvent(event, auditLog))
-      ),
+      data: loadedEvents.map((event) => presentEvent(event, auditLog)),
     };
   }
 );

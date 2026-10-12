@@ -1,31 +1,23 @@
+import { t } from "i18next";
 import { action } from "mobx";
 import { PlusIcon } from "outline-icons";
 import { Plugin } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
-import ReactDOM from "react-dom";
+import { createRoot } from "react-dom/client";
 import type { WidgetProps } from "@shared/editor/lib/Extension";
 import { PlaceholderPlugin } from "@shared/editor/plugins/PlaceholderPlugin";
 import { findParentNode } from "@shared/editor/queries/findParentNode";
-import type { Dictionary } from "~/hooks/useDictionary";
-import type { SuggestionOptions } from "~/editor/extensions/Suggestion";
 import Suggestion from "~/editor/extensions/Suggestion";
 import BlockMenu from "../components/BlockMenu";
 
-/**
- * Options for the BlockMenu extension.
- */
-type BlockMenuOptions = SuggestionOptions & {
-  /** A dictionary of translated strings used in the editor. */
-  dictionary: Dictionary;
-};
-
-export default class BlockMenuExtension extends Suggestion<BlockMenuOptions> {
+export default class BlockMenuExtension extends Suggestion {
   get defaultOptions() {
     return {
       trigger: "/",
       allowSpaces: false,
       requireSearchTerm: false,
       enabledInCode: false,
+      enabledInMarks: false,
     };
   }
 
@@ -37,7 +29,7 @@ export default class BlockMenuExtension extends Suggestion<BlockMenuOptions> {
     const button = document.createElement("button");
     button.className = "block-menu-trigger";
     button.type = "button";
-    ReactDOM.render(<PlusIcon />, button);
+    createRoot(button).render(<PlusIcon />);
 
     return [
       ...super.plugins,
@@ -67,6 +59,8 @@ export default class BlockMenuExtension extends Suggestion<BlockMenuOptions> {
                   () => {
                     button.onclick = action(() => {
                       this.state.query = "";
+                      this.state.trigger = null;
+                      this.state.triggerPos = null;
                       this.state.open = true;
                     });
                     return button;
@@ -90,14 +84,15 @@ export default class BlockMenuExtension extends Suggestion<BlockMenuOptions> {
             !!textContent &&
             node.childCount === 0 &&
             node.textContent === "",
-          text: this.options.dictionary.newLineEmpty,
+          text: `${t("Type '/' to insert")}…`,
         },
         {
           condition: ({ node, $start, state }) =>
             $start.depth === 1 &&
             state.selection.$from.pos === $start.pos + node.content.size &&
-            node.textContent === "/",
-          text: `  ${this.options.dictionary.newLineWithSlash}`,
+            node.textContent === "/" &&
+            node.firstChild?.marks.length === 0,
+          text: `  ${t("Keep typing to filter")}…`,
         },
       ]),
     ];

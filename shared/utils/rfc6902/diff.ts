@@ -1,4 +1,4 @@
-import isEqual from "lodash/isEqual";
+import { isEqual } from "es-toolkit/compat";
 import type { Pointer } from "./pointer";
 import { hasOwn, objectType } from "./util";
 
@@ -276,8 +276,10 @@ export function diffArrays<T>(
   const subInput = input_end - start;
   const subOutput = output_end - start;
 
+  // oxlint-disable-next-line unicorn/no-new-array
   const memo: Array<Array<DynamicAlternative>> = new Array(subInput + 1);
   for (let i = 0; i <= subInput; i++) {
+    // oxlint-disable-next-line unicorn/no-new-array
     memo[i] = new Array(subOutput + 1);
   }
   memo[0][0] = { prevI: -1, prevJ: -1, operation: null, cost: 0 };

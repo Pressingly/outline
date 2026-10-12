@@ -1,6 +1,6 @@
 import { IconTitleWrapper } from "@shared/components/Icon";
 import breakpoint from "styled-components-breakpoint";
-import first from "lodash/first";
+import { first } from "es-toolkit/compat";
 import { Suspense, useCallback } from "react";
 import styled from "styled-components";
 import { CollectionValidation } from "@shared/validations";
@@ -9,7 +9,7 @@ import Heading from "~/components/Heading";
 import ContentEditable from "~/components/ContentEditable";
 import CollectionIcon from "~/components/Icons/CollectionIcon";
 import type Collection from "~/models/Collection";
-import { colorPalette } from "@shared/utils/collections";
+import { colorPalette } from "@shared/constants";
 import usePolicy from "~/hooks/usePolicy";
 import { observer } from "mobx-react";
 import lazyWithRetry from "~/utils/lazyWithRetry";
@@ -90,7 +90,7 @@ const StyledHeading = styled(Heading)`
   display: flex;
   align-items: center;
   position: relative;
-  margin-left: 40px;
+  margin-left: 16px;
 
   ${breakpoint("tablet")`
     margin-left: 0;

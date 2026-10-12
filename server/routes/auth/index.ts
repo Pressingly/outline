@@ -49,11 +49,9 @@ router.get(
     }
 
     // Mint the JWT with the same expiry the cookie will carry so the token
-    // and the cookie die together. Without an `expiresAt` claim the
-    // validator at `utils/jwt.ts:47` skips the expiry check, leaving the
-    // token replayable indefinitely if it ever leaves the cookie.
+    // and the cookie die together.
     const expires = addDays(new Date(), JWT_COOKIE_TTL_DAYS);
-    const jwtToken = user.getJwtToken(expires, service);
+    const jwtToken = user.getSessionToken(expires, service);
 
     // ensure that the lastActiveAt on user is updated to prevent replay requests
     await user.updateActiveAt(ctx, true);

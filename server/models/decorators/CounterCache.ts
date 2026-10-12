@@ -1,4 +1,4 @@
-import isNil from "lodash/isNil";
+import { isNil } from "es-toolkit/compat";
 import type {
   IncludeOptions,
   InferAttributes,
@@ -42,7 +42,7 @@ export function CounterCache<
 
     const computeCount = (id: unknown) =>
       modelClass.count({
-        where: { [options.foreignKey]: id, ...(options.where ?? {}) },
+        where: Object.assign({ [options.foreignKey]: id }, options.where),
         include: options.include,
         distinct: !!options.include,
       });

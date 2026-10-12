@@ -11,10 +11,9 @@ import {
 import type { ImportTaskOutput } from "@shared/schema";
 import { type ImportTaskInput } from "@shared/schema";
 import type { ImportableIntegrationService } from "@shared/types";
-import { ImportTaskState } from "@shared/types";
+import { ImportTaskPhase, ImportTaskState } from "@shared/types";
 import Import from "./Import";
 import IdModel from "./base/IdModel";
-import Fix from "./decorators/Fix";
 
 // Not all fields are automatically inferred by Sequelize.
 // see https://sequelize.org/docs/v7/models/model-typing/#manual-attribute-typing
@@ -31,7 +30,6 @@ export type ImportTaskCreationAttributes<
   Partial<NonInferredAttributes<T>>;
 
 @Table({ tableName: "import_tasks", modelName: "import_task" })
-@Fix
 class ImportTask<T extends ImportableIntegrationService> extends IdModel<
   ImportTaskAttributes<T>,
   ImportTaskCreationAttributes<T>
@@ -40,6 +38,10 @@ class ImportTask<T extends ImportableIntegrationService> extends IdModel<
   @Column(DataType.STRING)
   state: ImportTaskState;
 
+  @IsIn([Object.values(ImportTaskPhase)])
+  @Column(DataType.STRING)
+  phase: ImportTaskPhase;
+
   @Column(DataType.JSONB)
   input: ImportTaskInput<T>;
 
@@ -47,7 +49,7 @@ class ImportTask<T extends ImportableIntegrationService> extends IdModel<
   @Column(DataType.JSONB)
   output: ImportTaskOutput | null;
 
-  @Column
+  @Column(DataType.STRING)
   error: string | null;
 
   // associations

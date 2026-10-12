@@ -1,6 +1,13 @@
+import { Node } from "prosemirror-model";
+import { prosemirrorToYDoc } from "y-prosemirror";
+import * as Y from "yjs";
 import type { ProsemirrorData, ReactionSummary } from "@shared/types";
 import { CommentStatusFilter } from "@shared/types";
-import { Comment, Reaction } from "@server/models";
+import { ProsemirrorHelper as SharedProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
+import documentCollaborativeUpdater from "@server/commands/documentCollaborativeUpdater";
+import { schema } from "@server/editor";
+import { Comment, Document, Reaction } from "@server/models";
+import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import {
   buildAdmin,
   buildCollection,
@@ -11,6 +18,7 @@ import {
   buildResolvedComment,
   buildTeam,
   buildUser,
+  buildViewer,
 } from "@server/test/factories";
 import { getTestServer } from "@server/test/support";
 
@@ -36,9 +44,8 @@ describe("#comments.info", () => {
       userId: user2.id,
       documentId: document.id,
     });
-    const res = await server.post("/api/comments.info", {
+    const res = await server.post("/api/comments.info", user, {
       body: {
-        token: user.getJwtToken(),
         id: comment.id,
       },
     });
@@ -65,9 +72,8 @@ describe("#comments.info", () => {
       userId: user2.id,
       documentId: document.id,
     });
-    const res = await server.post("/api/comments.info", {
+    const res = await server.post("/api/comments.info", user, {
       body: {
-        token: user.getJwtToken(),
         id: comment.id,
       },
     });
@@ -111,9 +117,8 @@ describe("#comments.info", () => {
     } as ProsemirrorData;
     await document.update({ content });
 
-    const res = await server.post("/api/comments.info", {
+    const res = await server.post("/api/comments.info", user, {
       body: {
-        token: user.getJwtToken(),
         id: comment.id,
         includeAnchorText: true,
       },
@@ -154,9 +159,8 @@ describe("#comments.info", () => {
     } as ProsemirrorData;
     await document.update({ content });
 
-    const res = await server.post("/api/comments.info", {
+    const res = await server.post("/api/comments.info", user, {
       body: {
-        token: user.getJwtToken(),
         id: comment.id,
         includeAnchorText: true,
       },
@@ -187,14 +191,15 @@ describe("#comments.list", () => {
     const comment = await buildComment({
       userId: user.id,
       documentId: document.id,
+      createdAt: new Date(Date.now() - 1000),
     });
     await buildResolvedComment(user, {
       userId: user.id,
       documentId: document.id,
+      createdAt: new Date(),
     });
-    const res = await server.post("/api/comments.list", {
+    const res = await server.post("/api/comments.list", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -242,9 +247,8 @@ describe("#comments.list", () => {
     } as ProsemirrorData;
     await document.update({ content });
 
-    const res = await server.post("/api/comments.list", {
+    const res = await server.post("/api/comments.list", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         includeAnchorText: true,
         sort: "createdAt",
@@ -277,9 +281,8 @@ describe("#comments.list", () => {
       userId: user.id,
       documentId: document.id,
     });
-    const res = await server.post("/api/comments.list", {
+    const res = await server.post("/api/comments.list", user, {
       body: {
-        token: user.getJwtToken(),
         collectionId: collection.id,
       },
     });
@@ -309,9 +312,8 @@ describe("#comments.list", () => {
       documentId: document.id,
       parentCommentId: comment.id,
     });
-    const res = await server.post("/api/comments.list", {
+    const res = await server.post("/api/comments.list", user, {
       body: {
-        token: user.getJwtToken(),
         parentCommentId: comment.id,
       },
     });
@@ -340,9 +342,8 @@ describe("#comments.list", () => {
       userId: user.id,
       documentId: document.id,
     });
-    const res = await server.post("/api/comments.list", {
+    const res = await server.post("/api/comments.list", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         statusFilter: [CommentStatusFilter.Resolved],
       },
@@ -388,11 +389,7 @@ describe("#comments.list", () => {
       userId: user.id,
       documentId: document2.id,
     });
-    const res = await server.post("/api/comments.list", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/comments.list", user);
     const body = await res.json();
 
     expect(res.status).toEqual(200);
@@ -423,9 +420,8 @@ describe("#comments.list", () => {
       reactions,
     });
 
-    const res = await server.post("/api/comments.list", {
+    const res = await server.post("/api/comments.list", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -462,9 +458,8 @@ describe("#comments.create", () => {
       documentId: document.id,
     });
 
-    const res = await server.post("/api/comments.create", {
+    const res = await server.post("/api/comments.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         data: comment.data,
       },
@@ -489,9 +484,8 @@ describe("#comments.create", () => {
 
     const text = "test\n\n- list item 1\n- list item 2";
 
-    const res = await server.post("/api/comments.create", {
+    const res = await server.post("/api/comments.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         text,
       },
@@ -513,17 +507,15 @@ describe("#comments.create", () => {
       teamId: user.teamId,
     });
 
-    const res = await server.post("/api/comments.create", {
+    const res = await server.post("/api/comments.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         data: null,
       },
     });
 
-    const anotherRes = await server.post("/api/comments.create", {
+    const anotherRes = await server.post("/api/comments.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         data: {
           type: "doc",
@@ -544,9 +536,8 @@ describe("#comments.create", () => {
       teamId: user.teamId,
     });
 
-    const res = await server.post("/api/comments.create", {
+    const res = await server.post("/api/comments.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         data: {
           type: "doc",
@@ -571,9 +562,8 @@ describe("#comments.create", () => {
       teamId: user.teamId,
     });
 
-    const res = await server.post("/api/comments.create", {
+    const res = await server.post("/api/comments.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         data: {
           type: "doc",
@@ -606,9 +596,8 @@ describe("#comments.create", () => {
       teamId: user.teamId,
     });
 
-    const res = await server.post("/api/comments.create", {
+    const res = await server.post("/api/comments.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         data: {
           type: "doc",
@@ -641,9 +630,8 @@ describe("#comments.create", () => {
       teamId: user.teamId,
     });
 
-    const res = await server.post("/api/comments.create", {
+    const res = await server.post("/api/comments.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         data: {
           type: "nonsense",
@@ -662,9 +650,8 @@ describe("#comments.create", () => {
       teamId: user.teamId,
     });
 
-    const res = await server.post("/api/comments.create", {
+    const res = await server.post("/api/comments.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         data: {
           type: "doc",
@@ -690,9 +677,8 @@ describe("#comments.create", () => {
       teamId: user.teamId,
     });
 
-    const res = await server.post("/api/comments.create", {
+    const res = await server.post("/api/comments.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         data: {
           type: "doc",
@@ -728,9 +714,8 @@ describe("#comments.create", () => {
       teamId: user.teamId,
     });
 
-    const res = await server.post("/api/comments.create", {
+    const res = await server.post("/api/comments.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         data: {
           type: "doc",
@@ -771,6 +756,255 @@ describe("#comments.create", () => {
       },
     });
   });
+
+  describe("anchoring", () => {
+    const imageAttrs = { src: "https://example.com/a.png" };
+    const documentContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "The quick brown fox" }],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "image", attrs: imageAttrs }],
+        },
+      ],
+    } as ProsemirrorData;
+
+    const buildAnchorableDocument = async (overrides: {
+      userId: string;
+      teamId: string;
+    }) => {
+      const doc = Node.fromJSON(schema, documentContent);
+      const ydoc = prosemirrorToYDoc(doc, "default");
+      return buildDocument({
+        ...overrides,
+        content: documentContent,
+        state: Buffer.from(Y.encodeStateAsUpdate(ydoc)),
+      });
+    };
+
+    const imageNodeId = () =>
+      SharedProsemirrorHelper.getNodeHash(
+        Node.fromJSON(schema, documentContent).child(1).child(0)
+      );
+
+    it("should create a comment anchored to a node", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const document = await buildAnchorableDocument({
+        userId: user.id,
+        teamId: user.teamId,
+      });
+
+      const res = await server.post("/api/comments.create", user, {
+        body: {
+          documentId: document.id,
+          text: "comment on image",
+          anchorNodeId: imageNodeId(),
+        },
+      });
+      const body = await res.json();
+
+      expect(res.status).toEqual(200);
+
+      const updated = await Document.findByPk(document.id, {
+        userId: user.id,
+      });
+      const image = DocumentHelper.toProsemirror(updated!).child(1).child(0);
+      expect(image.attrs.marks).toEqual([
+        {
+          type: "comment",
+          attrs: {
+            id: body.data.id,
+            userId: user.id,
+            draft: false,
+            resolved: false,
+          },
+        },
+      ]);
+    });
+
+    it("should allow a viewer to create an anchored comment", async () => {
+      const team = await buildTeam();
+      const author = await buildUser({ teamId: team.id });
+      const viewer = await buildViewer({ teamId: team.id });
+      const document = await buildAnchorableDocument({
+        userId: author.id,
+        teamId: team.id,
+      });
+
+      const res = await server.post("/api/comments.create", viewer, {
+        body: {
+          documentId: document.id,
+          text: "viewer comment",
+          anchorText: "brown fox",
+        },
+      });
+
+      expect(res.status).toEqual(200);
+    });
+
+    it("should not update the document updatedAt timestamp when anchoring", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const document = await buildAnchorableDocument({
+        userId: user.id,
+        teamId: user.teamId,
+      });
+      const updatedAt = document.updatedAt;
+
+      const res = await server.post("/api/comments.create", user, {
+        body: {
+          documentId: document.id,
+          text: "comment",
+          anchorText: "brown fox",
+        },
+      });
+
+      expect(res.status).toEqual(200);
+      await document.reload();
+      expect(document.updatedAt).toEqual(updatedAt);
+    });
+
+    it("should not register an edit when the collaboration server persists after anchoring", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const document = await buildAnchorableDocument({
+        userId: user.id,
+        teamId: user.teamId,
+      });
+
+      const res = await server.post("/api/comments.create", user, {
+        body: {
+          documentId: document.id,
+          text: "comment",
+          anchorText: "brown fox",
+        },
+      });
+      expect(res.status).toEqual(200);
+
+      // Simulate the collaboration server persisting the session after it has
+      // merged the server-applied comment mark — no further edits were made,
+      // so the document must not be marked as updated.
+      const updated = await Document.findByPk(document.id, {
+        userId: user.id,
+        includeState: true,
+      });
+      const updatedAt = updated!.updatedAt;
+      const ydoc = new Y.Doc();
+      Y.applyUpdate(ydoc, updated!.state!);
+
+      await documentCollaborativeUpdater({
+        documentId: document.id,
+        ydoc,
+        sessionCollaboratorIds: [user.id],
+        isLastConnection: true,
+        clientVersion: null,
+      });
+
+      await document.reload();
+      expect(document.updatedAt).toEqual(updatedAt);
+    });
+
+    it("should not allow both anchorText and anchorNodeId", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const document = await buildAnchorableDocument({
+        userId: user.id,
+        teamId: user.teamId,
+      });
+
+      const res = await server.post("/api/comments.create", user, {
+        body: {
+          documentId: document.id,
+          text: "comment",
+          anchorText: "brown fox",
+          anchorNodeId: imageNodeId(),
+        },
+      });
+
+      expect(res.status).toEqual(400);
+    });
+
+    it("should error when no node matches the anchorNodeId", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const document = await buildAnchorableDocument({
+        userId: user.id,
+        teamId: user.teamId,
+      });
+
+      const res = await server.post("/api/comments.create", user, {
+        body: {
+          documentId: document.id,
+          text: "comment",
+          anchorNodeId: "unknown-hash",
+        },
+      });
+
+      // The "was not found" message is transformed to a 404 by the API error
+      // handler, matching the behavior of a missing anchorText.
+      expect(res.status).toEqual(404);
+    });
+
+    it("should create state when the document has no collaborative state", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const document = await buildDocument({
+        userId: user.id,
+        teamId: user.teamId,
+        content: documentContent,
+      });
+      expect(document.state).toBeFalsy();
+
+      const res = await server.post("/api/comments.create", user, {
+        body: {
+          documentId: document.id,
+          text: "comment",
+          anchorText: "brown fox",
+        },
+      });
+      const body = await res.json();
+
+      expect(res.status).toEqual(200);
+
+      const updated = await Document.findByPk(document.id, {
+        userId: user.id,
+        includeState: true,
+      });
+      expect(updated!.state).toBeTruthy();
+
+      expect(
+        SharedProsemirrorHelper.getComments(
+          DocumentHelper.toProsemirror(updated!)
+        )
+      ).toMatchObject([
+        { id: body.data.id, userId: user.id, text: "brown fox" },
+      ]);
+    });
+
+    it("should error when the anchor node is not in a document without state", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const document = await buildDocument({
+        userId: user.id,
+        teamId: user.teamId,
+      });
+
+      const res = await server.post("/api/comments.create", user, {
+        body: {
+          documentId: document.id,
+          text: "comment",
+          anchorNodeId: imageNodeId(),
+        },
+      });
+
+      expect(res.status).toEqual(404);
+    });
+  });
 });
 
 describe("#comments.update", () => {
@@ -794,9 +1028,8 @@ describe("#comments.update", () => {
       documentId: document.id,
     });
 
-    const res = await server.post("/api/comments.update", {
+    const res = await server.post("/api/comments.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: comment.id,
         data: comment.data,
       },
@@ -823,9 +1056,8 @@ describe("#comments.update", () => {
       documentId: document.id,
     });
 
-    const res = await server.post("/api/comments.update", {
+    const res = await server.post("/api/comments.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: comment.id,
         data: {
           type: "doc",
@@ -865,9 +1097,8 @@ describe("#comments.resolve", () => {
       documentId: document.id,
     });
 
-    const res = await server.post("/api/comments.resolve", {
+    const res = await server.post("/api/comments.resolve", user, {
       body: {
-        token: user.getJwtToken(),
         id: comment.id,
       },
     });
@@ -905,9 +1136,8 @@ describe("#comments.resolve", () => {
       parentCommentId: parentComment.id,
     });
 
-    const res = await server.post("/api/comments.resolve", {
+    const res = await server.post("/api/comments.resolve", user, {
       body: {
-        token: user.getJwtToken(),
         id: comment.id,
       },
     });
@@ -936,9 +1166,8 @@ describe("#comments.unresolve", () => {
       documentId: document.id,
     });
 
-    const res = await server.post("/api/comments.unresolve", {
+    const res = await server.post("/api/comments.unresolve", user, {
       body: {
-        token: user.getJwtToken(),
         id: comment.id,
       },
     });
@@ -978,9 +1207,8 @@ describe("#comments.add_reaction", () => {
       documentId: document.id,
     });
 
-    const res = await server.post("/api/comments.add_reaction", {
+    const res = await server.post("/api/comments.add_reaction", user, {
       body: {
-        token: user.getJwtToken(),
         id: comment.id,
         emoji: "😄",
       },
@@ -1014,9 +1242,8 @@ describe("#comments.add_reaction", () => {
       reactions: [{ emoji: "😄", userIds: ["test-user"] }],
     });
 
-    const res = await server.post("/api/comments.add_reaction", {
+    const res = await server.post("/api/comments.add_reaction", user, {
       body: {
-        token: user.getJwtToken(),
         id: comment.id,
         emoji: "😄",
       },
@@ -1053,9 +1280,8 @@ describe("#comments.add_reaction", () => {
       createdById: user.id,
     });
 
-    const res = await server.post("/api/comments.add_reaction", {
+    const res = await server.post("/api/comments.add_reaction", user, {
       body: {
-        token: user.getJwtToken(),
         id: comment.id,
         emoji: emoji.id,
       },
@@ -1092,9 +1318,8 @@ describe("#comments.add_reaction", () => {
       teamId: otherTeam.id,
     });
 
-    const res = await server.post("/api/comments.add_reaction", {
+    const res = await server.post("/api/comments.add_reaction", user, {
       body: {
-        token: user.getJwtToken(),
         id: comment.id,
         emoji: emoji.id,
       },
@@ -1132,9 +1357,8 @@ describe("#comments.remove_reaction", () => {
       { hooks: false }
     );
 
-    const res = await server.post("/api/comments.remove_reaction", {
+    const res = await server.post("/api/comments.remove_reaction", user, {
       body: {
-        token: user.getJwtToken(),
         id: comment.id,
         emoji: "😄",
       },
@@ -1174,9 +1398,8 @@ describe("#comments.remove_reaction", () => {
       { hooks: false }
     );
 
-    const res = await server.post("/api/comments.remove_reaction", {
+    const res = await server.post("/api/comments.remove_reaction", user, {
       body: {
-        token: user.getJwtToken(),
         id: comment.id,
         emoji: "😄",
       },

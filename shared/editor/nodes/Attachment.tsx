@@ -1,4 +1,4 @@
-import type { Token } from "markdown-it";
+import type Token from "markdown-it/lib/token.mjs";
 import { DownloadIcon } from "outline-icons";
 import type {
   NodeSpec,
@@ -9,7 +9,6 @@ import type { Command } from "prosemirror-state";
 import { NodeSelection } from "prosemirror-state";
 import { Trans } from "react-i18next";
 import type { Primitive } from "utility-types";
-import type { Dictionary } from "~/hooks/useDictionary";
 import { bytesToHumanReadable, getEventFiles } from "../../utils/files";
 import { sanitizeUrl } from "../../utils/urls";
 import insertFiles from "../commands/insertFiles";
@@ -17,20 +16,14 @@ import toggleWrap from "../commands/toggleWrap";
 import FileExtension from "../components/FileExtension";
 import Widget from "../components/Widget";
 import type { MarkdownSerializerState } from "../lib/markdown/serializer";
+import { resolvePDFDimensions } from "../lib/pdf";
+import { isPDFAttachment } from "../queries/isPDFAttachment";
 import attachmentsRule from "../rules/links";
 import type { ComponentProps } from "../types";
 import Node from "./Node";
 import PdfViewer from "../components/PDF";
 
-/**
- * Options for the Attachment node.
- */
-type AttachmentOptions = {
-  /** A dictionary of translated strings used in the editor. */
-  dictionary: Dictionary;
-};
-
-export default class Attachment extends Node<AttachmentOptions> {
+export default class Attachment extends Node {
   get name() {
     return "attachment";
   }
@@ -107,7 +100,7 @@ export default class Attachment extends Node<AttachmentOptions> {
 
   handleChangeSize =
     ({ node, getPos }: { node: ProsemirrorNode; getPos: () => number }) =>
-    ({ width, height }: { width: number; height?: number }) => {
+    ({ width }: { width: number; height?: number }) => {
       if (!node.attrs.preview) {
         return;
       }
@@ -117,12 +110,10 @@ export default class Attachment extends Node<AttachmentOptions> {
 
       const pos = getPos();
       const $pos = doc.resolve(pos);
+      const dimensions = resolvePDFDimensions(width);
 
       view.dispatch(tr.setSelection(new NodeSelection($pos)));
-      commands["resizeAttachment"]({
-        width,
-        height: height || node.attrs.height,
-      });
+      commands["resizeAttachment"](dimensions);
     };
 
   component = (props: ComponentProps) => {
@@ -136,9 +127,7 @@ export default class Attachment extends Node<AttachmentOptions> {
       </>
     );
 
-    return node.attrs.preview &&
-      !embedsDisabled &&
-      node.attrs.contentType === "application/pdf" ? (
+    return node.attrs.preview && !embedsDisabled && isPDFAttachment(node) ? (
       <PdfViewer
         icon={<FileExtension title={node.attrs.title} />}
         title={node.attrs.title}
@@ -188,18 +177,18 @@ export default class Attachment extends Node<AttachmentOptions> {
           onFileUploadStart,
           onFileUploadStop,
           onFileUploadProgress,
+          onNotice,
         } = this.editor.props;
 
         if (!uploadFile) {
           throw new Error("uploadFile prop is required to replace attachments");
         }
 
-        const accept =
-          node.attrs.contentType === "application/pdf"
-            ? ".pdf"
-            : node.type.name === "attachment"
-              ? "*"
-              : null;
+        const accept = isPDFAttachment(node)
+          ? ".pdf"
+          : node.type.name === "attachment"
+            ? "*"
+            : null;
 
         if (accept === null) {
           return false;
@@ -216,7 +205,7 @@ export default class Attachment extends Node<AttachmentOptions> {
             onFileUploadStart,
             onFileUploadStop,
             onFileUploadProgress,
-            dictionary: this.options.dictionary,
+            onNotice,
             replaceExisting: true,
             attrs: {
               preview: node.attrs.preview,
@@ -231,11 +220,16 @@ export default class Attachment extends Node<AttachmentOptions> {
           return false;
         }
         const { node } = state.selection;
+        const href = sanitizeUrl(node.attrs.href);
+        if (!href) {
+          return false;
+        }
 
         // create a temporary link node and click it
         const link = document.createElement("a");
-        link.href = node.attrs.href;
+        link.href = href;
         link.target = "_blank";
+        link.rel = "noopener noreferrer";
         document.body.appendChild(link);
         link.click();
 
@@ -249,7 +243,7 @@ export default class Attachment extends Node<AttachmentOptions> {
         }
         const { node } = state.selection;
 
-        if (node.attrs.contentType !== "application/pdf") {
+        if (!isPDFAttachment(node)) {
           return false;
         }
 

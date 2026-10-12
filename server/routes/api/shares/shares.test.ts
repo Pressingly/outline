@@ -8,6 +8,7 @@ import {
   buildDocument,
   buildShare,
   buildAdmin,
+  buildViewer,
   buildCollection,
   buildTeam,
 } from "@server/test/factories";
@@ -19,9 +20,8 @@ const server = getTestServer();
 describe("#shares.list", () => {
   it("should fail with status 400 bad request when an invalid sort value is suppled", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/shares.list", {
+    const res = await server.post("/api/shares.list", user, {
       body: {
-        token: user.getJwtToken(),
         sort: "foo",
       },
     });
@@ -47,11 +47,7 @@ describe("#shares.list", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/shares.list", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/shares.list", user);
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data.length).toEqual(1);
@@ -71,9 +67,8 @@ describe("#shares.list", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/shares.list", {
+    const res = await server.post("/api/shares.list", user, {
       body: {
-        token: user.getJwtToken(),
         query: "test",
       },
     });
@@ -98,9 +93,8 @@ describe("#shares.list", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/shares.list", {
+    const res = await server.post("/api/shares.list", user, {
       body: {
-        token: user.getJwtToken(),
         query: "test",
       },
     });
@@ -123,11 +117,7 @@ describe("#shares.list", () => {
       userId: user.id,
     });
     await share.revoke(createContext({ user }));
-    const res = await server.post("/api/shares.list", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/shares.list", user);
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data.length).toEqual(0);
@@ -145,11 +135,7 @@ describe("#shares.list", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/shares.list", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/shares.list", user);
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data.length).toEqual(0);
@@ -167,11 +153,7 @@ describe("#shares.list", () => {
       userId: user.id,
     });
     await withAPIContext(user, (ctx) => document.destroyWithCtx(ctx));
-    const res = await server.post("/api/shares.list", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/shares.list", user);
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data.length).toEqual(0);
@@ -187,16 +169,33 @@ describe("#shares.list", () => {
       teamId: admin.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/shares.list", {
-      body: {
-        token: admin.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/shares.list", admin);
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data.length).toEqual(1);
     expect(body.data[0].id).toEqual(share.id);
     expect(body.data[0].documentTitle).toBe(document.title);
+  });
+
+  it("admins should return shares created by a deleted user", async () => {
+    const team = await buildTeam();
+    const admin = await buildAdmin({ teamId: team.id });
+    const user = await buildUser({ teamId: team.id });
+    const document = await buildDocument({ userId: admin.id, teamId: team.id });
+    const share = await buildShare({
+      documentId: document.id,
+      teamId: team.id,
+      userId: user.id,
+    });
+    await user.destroy();
+
+    const res = await server.post("/api/shares.list", admin);
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.length).toEqual(1);
+    expect(body.pagination.total).toEqual(1);
+    expect(body.data[0].id).toEqual(share.id);
+    expect(body.data[0].createdBy).toBeUndefined();
   });
 
   it("admins should not return shares in collection not a member of", async () => {
@@ -219,11 +218,7 @@ describe("#shares.list", () => {
     });
     collection.permission = null;
     await collection.save();
-    const res = await server.post("/api/shares.list", {
-      body: {
-        token: admin.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/shares.list", admin);
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data.length).toEqual(0);
@@ -240,11 +235,7 @@ describe("#shares.list", () => {
 describe("#shares.create", () => {
   it("should fail with status 400 bad request when both documentId and collectionId are missing", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/shares.create", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/shares.create", user);
     const body = await res.json();
     expect(res.status).toEqual(400);
     expect(body.message).toEqual(
@@ -254,9 +245,8 @@ describe("#shares.create", () => {
 
   it("should fail with status 400 bad request when documentId is invalid", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: "foo",
       },
     });
@@ -271,9 +261,8 @@ describe("#shares.create", () => {
       userId: user.id,
       teamId: user.teamId,
     });
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         collectionId: collection.id,
       },
     });
@@ -289,9 +278,8 @@ describe("#shares.create", () => {
       userId: user.id,
       teamId: user.teamId,
     });
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -307,9 +295,8 @@ describe("#shares.create", () => {
       userId: user.id,
       teamId: user.teamId,
     });
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         includeChildDocuments: true,
         published: true,
@@ -330,9 +317,8 @@ describe("#shares.create", () => {
       userId: user.id,
       teamId: user.teamId,
     });
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         published: true,
       },
@@ -349,9 +335,8 @@ describe("#shares.create", () => {
       userId: user.id,
       teamId: user.teamId,
     });
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         published: true,
         allowIndexing: false,
@@ -392,9 +377,8 @@ describe("#shares.create", () => {
         },
       }
     );
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         published: true,
       },
@@ -428,17 +412,15 @@ describe("#shares.create", () => {
         },
       }
     );
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
     const body = await res.json();
     expect(res.status).toEqual(200);
-    const response = await server.post("/api/shares.update", {
+    const response = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: body.data.id,
         published: true,
       },
@@ -458,9 +440,8 @@ describe("#shares.create", () => {
       userId: user.id,
     });
     await share.revoke(createContext({ user }));
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -481,15 +462,39 @@ describe("#shares.create", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data.id).toBe(share.id);
+  });
+
+  it("should not disclose an existing published share to a user without share permission", async () => {
+    const admin = await buildAdmin();
+    const viewer = await buildViewer({ teamId: admin.teamId });
+    const document = await buildDocument({
+      userId: admin.id,
+      teamId: admin.teamId,
+    });
+    const share = await buildShare({
+      documentId: document.id,
+      teamId: admin.teamId,
+      userId: admin.id,
+      published: true,
+    });
+    const res = await server.post("/api/shares.create", viewer, {
+      body: {
+        documentId: document.id,
+        published: false,
+      },
+    });
+    expect(res.status).toEqual(403);
+    // The existing public share must remain untouched.
+    await share.reload();
+    expect(share.published).toBe(true);
   });
 
   it("should allow creating a share record if team sharing disabled but not publishing", async () => {
@@ -499,17 +504,15 @@ describe("#shares.create", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
     const body = await res.json();
     expect(res.status).toEqual(200);
-    const response = await server.post("/api/shares.update", {
+    const response = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: body.data.id,
         published: true,
       },
@@ -529,17 +532,15 @@ describe("#shares.create", () => {
       collectionId: collection.id,
       teamId: user.teamId,
     });
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
     const body = await res.json();
     expect(res.status).toEqual(200);
-    const response = await server.post("/api/shares.update", {
+    const response = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: body.data.id,
         published: true,
       },
@@ -562,9 +563,8 @@ describe("#shares.create", () => {
   it("should require authorization", async () => {
     const document = await buildDocument();
     const user = await buildUser();
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -575,9 +575,8 @@ describe("#shares.create", () => {
     const user = await buildUser();
     const otherDocument = await buildDocument();
 
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: otherDocument.id,
       },
     });
@@ -588,9 +587,8 @@ describe("#shares.create", () => {
     const user = await buildUser();
     const otherDocument = await buildDocument();
 
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: otherDocument.id,
         published: true,
       },
@@ -602,9 +600,8 @@ describe("#shares.create", () => {
     const user = await buildUser();
     const otherCollection = await buildCollection();
 
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         collectionId: otherCollection.id,
       },
     });
@@ -622,9 +619,8 @@ describe("#shares.create", () => {
       teamId: user.teamId,
     });
 
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         collectionId: collection.id,
         documentId: document.id,
       },
@@ -643,9 +639,8 @@ describe("#shares.create", () => {
       teamId: user.teamId,
     });
 
-    const res = await server.post("/api/shares.create", {
+    const res = await server.post("/api/shares.create", user, {
       body: {
-        token: user.getJwtToken(),
         collectionId: collection.id,
         documentId: document.id,
         published: true,
@@ -658,11 +653,7 @@ describe("#shares.create", () => {
 describe("#shares.info", () => {
   it("should fail with status 400 bad request when id, collectionId and documentId are missing", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/shares.info", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/shares.info", user);
     const body = await res.json();
     expect(res.status).toEqual(400);
     expect(body.message).toEqual(
@@ -672,9 +663,8 @@ describe("#shares.info", () => {
 
   it("should fail with status 400 bad request when documentId is invalid", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/shares.info", {
+    const res = await server.post("/api/shares.info", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: "foo",
       },
     });
@@ -702,9 +692,8 @@ describe("#shares.info", () => {
       teamId: admin.teamId,
       userId: admin.id,
     });
-    const res = await server.post("/api/shares.info", {
+    const res = await server.post("/api/shares.info", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -722,9 +711,8 @@ describe("#shares.info", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/shares.info", {
+    const res = await server.post("/api/shares.info", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
       },
     });
@@ -734,6 +722,51 @@ describe("#shares.info", () => {
     expect(body.data.shares).toBeTruthy();
     expect(body.data.shares).toHaveLength(1);
     expect(body.data.shares[0].id).toEqual(share.id);
+  });
+
+  it("should not return the sharer for an unauthenticated viewer", async () => {
+    const user = await buildUser();
+    const document = await buildDocument({
+      createdById: user.id,
+      teamId: user.teamId,
+    });
+    const share = await buildShare({
+      documentId: document.id,
+      teamId: user.teamId,
+      userId: user.id,
+      published: true,
+    });
+    const res = await server.post("/api/shares.info", {
+      body: {
+        id: share.id,
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.shares[0].id).toEqual(share.id);
+    expect(body.data.shares[0].createdBy).toBeUndefined();
+  });
+
+  it("should return the sharer for a viewer with access to the share", async () => {
+    const user = await buildUser();
+    const document = await buildDocument({
+      createdById: user.id,
+      teamId: user.teamId,
+    });
+    const share = await buildShare({
+      documentId: document.id,
+      teamId: user.teamId,
+      userId: user.id,
+      published: true,
+    });
+    const res = await server.post("/api/shares.info", user, {
+      body: {
+        id: share.id,
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.shares[0].createdBy.id).toEqual(user.id);
   });
 
   it("should allow reading share by documentId", async () => {
@@ -747,9 +780,8 @@ describe("#shares.info", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/shares.info", {
+    const res = await server.post("/api/shares.info", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -765,9 +797,8 @@ describe("#shares.info", () => {
       userId: user.id,
       teamId: user.teamId,
     });
-    const res = await server.post("/api/shares.info", {
+    const res = await server.post("/api/shares.info", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -803,9 +834,8 @@ describe("#shares.info", () => {
     });
     await collection.reload();
     await collection.addDocumentToStructure(childDocument, 0);
-    const res = await server.post("/api/shares.info", {
+    const res = await server.post("/api/shares.info", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: childDocument.id,
       },
     });
@@ -852,9 +882,8 @@ describe("#shares.info", () => {
       userId: user.id,
     });
     await collection.addDocumentToStructure(childDocument, 0);
-    const res = await server.post("/api/shares.info", {
+    const res = await server.post("/api/shares.info", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: childDocument.id,
       },
     });
@@ -897,9 +926,8 @@ describe("#shares.info", () => {
     });
     await collection.reload();
     await collection.addDocumentToStructure(childDocument, 0);
-    const res = await server.post("/api/shares.info", {
+    const res = await server.post("/api/shares.info", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: childDocument.id,
       },
     });
@@ -928,9 +956,8 @@ describe("#shares.update", () => {
       documentId: document.id,
       teamId: user.teamId,
     });
-    const res = await server.post("/api/shares.update", {
+    const res = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
         urlId: "url_id",
       },
@@ -944,9 +971,8 @@ describe("#shares.update", () => {
 
   it("should fail with status 400 bad request when id is missing", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/shares.update", {
+    const res = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         urlId: "url-id",
       },
     });
@@ -967,9 +993,8 @@ describe("#shares.update", () => {
       documentId: document.id,
       teamId: user.teamId,
     });
-    const res = await server.post("/api/shares.update", {
+    const res = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
         urlId: "url-id",
       },
@@ -989,17 +1014,15 @@ describe("#shares.update", () => {
       documentId: document.id,
       teamId: user.teamId,
     });
-    await server.post("/api/shares.update", {
+    await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
         urlId: "url-id",
       },
     });
 
-    const res = await server.post("/api/shares.update", {
+    const res = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
         urlId: null,
       },
@@ -1019,9 +1042,8 @@ describe("#shares.update", () => {
       documentId: document.id,
       teamId: user.teamId,
     });
-    const res = await server.post("/api/shares.update", {
+    const res = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
         title: "Custom Title",
         iconUrl: "https://example.com/icon.png",
@@ -1045,9 +1067,8 @@ describe("#shares.update", () => {
       title: "Custom Title",
       iconUrl: "https://example.com/icon.png",
     });
-    const res = await server.post("/api/shares.update", {
+    const res = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
         title: null,
         iconUrl: null,
@@ -1070,9 +1091,8 @@ describe("#shares.update", () => {
       teamId: user.teamId,
       title: "Custom Title",
     });
-    const res = await server.post("/api/shares.update", {
+    const res = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
         title: "",
       },
@@ -1092,9 +1112,8 @@ describe("#shares.update", () => {
       documentId: document.id,
       teamId: user.teamId,
     });
-    const res = await server.post("/api/shares.update", {
+    const res = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
         iconUrl: "/uploads/icon.png",
       },
@@ -1114,9 +1133,8 @@ describe("#shares.update", () => {
       documentId: document.id,
       teamId: user.teamId,
     });
-    const res = await server.post("/api/shares.update", {
+    const res = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
         iconUrl: "not a url",
       },
@@ -1134,9 +1152,8 @@ describe("#shares.update", () => {
       documentId: document.id,
       teamId: user.teamId,
     });
-    const res = await server.post("/api/shares.update", {
+    const res = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
         iconUrl: "javascript:alert(1)",
       },
@@ -1154,9 +1171,8 @@ describe("#shares.update", () => {
       documentId: document.id,
       teamId: user.teamId,
     });
-    const res = await server.post("/api/shares.update", {
+    const res = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
         published: true,
       },
@@ -1178,9 +1194,8 @@ describe("#shares.update", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/shares.update", {
+    const res = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
         published: true,
       },
@@ -1201,9 +1216,8 @@ describe("#shares.update", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/shares.update", {
+    const res = await server.post("/api/shares.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: share.id,
         published: true,
       },
@@ -1246,9 +1260,8 @@ describe("#shares.update", () => {
       teamId: admin.teamId,
       userId: admin.id,
     });
-    const res = await server.post("/api/shares.update", {
+    const res = await server.post("/api/shares.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
         published: true,
       },
@@ -1260,11 +1273,7 @@ describe("#shares.update", () => {
 describe("#shares.revoke", () => {
   it("should fail with status 400 bad request when id is missing", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/shares.revoke", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/shares.revoke", user);
     const body = await res.json();
     expect(res.status).toEqual(400);
     expect(body.message).toEqual(
@@ -1283,9 +1292,8 @@ describe("#shares.revoke", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/shares.revoke", {
+    const res = await server.post("/api/shares.revoke", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
       },
     });
@@ -1303,9 +1311,8 @@ describe("#shares.revoke", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/shares.revoke", {
+    const res = await server.post("/api/shares.revoke", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
       },
     });
@@ -1324,9 +1331,8 @@ describe("#shares.revoke", () => {
       userId: user.id,
     });
     await withAPIContext(user, (ctx) => document.destroyWithCtx(ctx));
-    const res = await server.post("/api/shares.revoke", {
+    const res = await server.post("/api/shares.revoke", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
       },
     });
@@ -1343,9 +1349,8 @@ describe("#shares.revoke", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/shares.revoke", {
+    const res = await server.post("/api/shares.revoke", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: share.id,
       },
     });
@@ -1383,9 +1388,8 @@ describe("#shares.revoke", () => {
       teamId: admin.teamId,
       userId: admin.id,
     });
-    const res = await server.post("/api/shares.revoke", {
+    const res = await server.post("/api/shares.revoke", user, {
       body: {
-        token: user.getJwtToken(),
         id: share.id,
       },
     });
@@ -1505,6 +1509,71 @@ describe("#shares.subscribe", () => {
     await subscription.reload();
     expect(subscription.unsubscribedAt).toBeNull();
     expect(subscription.confirmedAt).toBeNull();
+  });
+
+  it("should resend confirmation for a stale unconfirmed subscription", async () => {
+    const share = await buildShare();
+    const subscription = await ShareSubscription.create({
+      shareId: share.id,
+      documentId: share.documentId!,
+      email: "user@example.com",
+      emailFingerprint:
+        ShareSubscription.normalizeEmailFingerprint("user@example.com"),
+      secret: randomString(32),
+    });
+    const staleDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await ShareSubscription.update(
+      { createdAt: staleDate, updatedAt: staleDate },
+      { where: { id: subscription.id }, silent: true }
+    );
+    const previousSecret = subscription.secret;
+
+    const res = await server.post("/api/shares.subscribe", {
+      body: {
+        shareId: share.id,
+        documentId: share.documentId!,
+        email: "user@example.com",
+      },
+    });
+    expect(res.status).toEqual(200);
+
+    await subscription.reload();
+    expect(subscription.secret).not.toBe(previousSecret);
+  });
+
+  it("should back off resending confirmation as the subscription ages", async () => {
+    const share = await buildShare();
+    const subscription = await ShareSubscription.create({
+      shareId: share.id,
+      documentId: share.documentId!,
+      email: "user@example.com",
+      emailFingerprint:
+        ShareSubscription.normalizeEmailFingerprint("user@example.com"),
+      secret: randomString(32),
+    });
+    // Created ten days ago with a confirmation resent two hours ago
+    await ShareSubscription.update(
+      {
+        createdAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+        updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      },
+      { where: { id: subscription.id }, silent: true }
+    );
+    const previousSecret = subscription.secret;
+
+    const res = await server.post("/api/shares.subscribe", {
+      body: {
+        shareId: share.id,
+        documentId: share.documentId!,
+        email: "user@example.com",
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.success).toBe(true);
+
+    await subscription.reload();
+    expect(subscription.secret).toBe(previousSecret);
   });
 
   it("should fail for unpublished share", async () => {

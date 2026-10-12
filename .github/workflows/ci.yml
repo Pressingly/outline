@@ -18,101 +18,34 @@ env:
   SMTP_USERNAME: localhost
 
 jobs:
-  setup:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Enable Corepack
-        run: corepack enable
-      - name: Use Node.js 24.x
-        uses: actions/setup-node@v5
-        with:
-          node-version: 24.x
-          cache: "yarn"
-      - name: Cache node_modules
-        id: cache-node-modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-24.x-${{ hashFiles('yarn.lock') }}
-      - name: Install dependencies
-        if: steps.cache-node-modules.outputs.cache-hit != 'true'
-        run: yarn install --immutable
-
-  lint:
-    needs: setup
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Enable Corepack
-        run: corepack enable
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24.x
-          cache: "yarn"
-      - name: Restore node_modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-24.x-${{ hashFiles('yarn.lock') }}
-      - run: yarn lint --quiet
-
-  types:
-    needs: setup
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Enable Corepack
-        run: corepack enable
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24.x
-          cache: "yarn"
-      - name: Restore node_modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-24.x-${{ hashFiles('yarn.lock') }}
-      - run: yarn tsc
-
-  audit:
-    needs: [setup, changes]
-    if: ${{ needs.changes.outputs.deps == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Enable Corepack
-        run: corepack enable
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24.x
-          cache: "yarn"
-      - name: Restore node_modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-24.x-${{ hashFiles('yarn.lock') }}
-      - run: yarn npm audit --severity high --recursive --environment production
-
   changes:
     runs-on: ubuntu-latest
     outputs:
+      code: ${{ steps.filter.outputs.code }}
       config: ${{ steps.filter.outputs.config }}
       server: ${{ steps.filter.outputs.server }}
       app: ${{ steps.filter.outputs.app }}
       deps: ${{ steps.filter.outputs.deps }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dorny/paths-filter@v2
+      - uses: dorny/paths-filter@4512585405083f25c027a35db413c2b3b9006d50 # v2
         id: filter
         with:
           filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+              - '!docs/**'
+              - '!public/**'
+              - '!shared/i18n/locales/**'
             config:
               - '.github/**'
               - 'vite.config.ts'
+              - 'vitest.config.ts'
             server:
               - 'server/**'
               - 'shared/**'
+              - 'plugins/**'
               - 'package.json'
               - 'yarn.lock'
             app:
@@ -125,8 +58,45 @@ jobs:
               - 'yarn.lock'
               - '.yarnrc.yml'
 
+  lint:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install
+      - run: yarn lint --quiet
+
+  actionlint:
+    needs: changes
+    if: ${{ needs.changes.outputs.config == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color
+
+  types:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install
+      - run: yarn tsc
+
+  audit:
+    needs: changes
+    if: ${{ needs.changes.outputs.deps == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install
+      - run: yarn npm audit --severity high --recursive --environment production
+
   test:
-    needs: [setup, changes]
+    needs: changes
     if: ${{ needs.changes.outputs.app == 'true' || needs.changes.outputs.config == 'true' }}
     runs-on: ubuntu-latest
     strategy:
@@ -134,21 +104,11 @@ jobs:
         test-group: [app, shared]
     steps:
       - uses: actions/checkout@v5
-      - name: Enable Corepack
-        run: corepack enable
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24.x
-          cache: "yarn"
-      - name: Restore node_modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-24.x-${{ hashFiles('yarn.lock') }}
+      - uses: ./.github/actions/install
       - run: yarn test:${{ matrix.test-group }}
 
   test-server:
-    needs: [setup, changes]
+    needs: changes
     if: ${{ needs.changes.outputs.server == 'true' || needs.changes.outputs.config == 'true' }}
     runs-on: ubuntu-latest
     services:
@@ -172,46 +132,42 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
-      - name: Enable Corepack
-        run: corepack enable
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24.x
-          cache: "yarn"
-      - name: Restore node_modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-24.x-${{ hashFiles('yarn.lock') }}
+      - uses: ./.github/actions/install
       - run: yarn sequelize db:migrate
       - name: Run server tests
-        run: |
-          TESTFILES=$(find . -name "*.test.ts" -path "*/server/*" | sort | awk "NR % 4 == (${{ matrix.shard }} - 1)")
-          yarn test --maxWorkers=2 $TESTFILES
+        run: yarn test:server --maxWorkers=2 --shard=${{ matrix.shard }}/4
 
   bundle-size:
-    needs: [setup, types, changes]
+    needs: changes
     if: ${{ (needs.changes.outputs.app == 'true' || needs.changes.outputs.config == 'true') && github.repository == 'outline/outline' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Enable Corepack
-        run: corepack enable
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24.x
-          cache: "yarn"
-      - name: Restore node_modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-24.x-${{ hashFiles('yarn.lock') }}
+      - uses: ./.github/actions/install
       - name: Set environment to production
-        run: echo "NODE_ENV=production" >> $GITHUB_ENV
+        run: echo "NODE_ENV=production" >> "$GITHUB_ENV"
       - run: yarn vite:build
       - name: Send bundle stats to RelativeCI
-        uses: relative-ci/agent-action@v2
+        if: ${{ env.RELATIVE_CI_KEY != '' }}
+        env:
+          RELATIVE_CI_KEY: ${{ secrets.RELATIVE_CI_KEY }}
+        uses: relative-ci/agent-action@38328454d6a23942175eba485fca4fbb807b1f03 # v2
         with:
           key: ${{ secrets.RELATIVE_CI_KEY }}
           token: ${{ secrets.GITHUB_TOKEN }}
           webpackStatsFile: ./build/app/webpack-stats.json
+
+  # Always runs, so it can be used as the single required status check. Jobs
+  # above are skipped when irrelevant to the changes, which is a pass here.
+  # Audit is intentionally excluded, it reports advisories that can have no
+  # fix available or affect dev only and should not block merging.
+  ci:
+    needs: [changes, lint, actionlint, types, test, test-server, bundle-size]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check job results
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "One or more jobs failed or were cancelled."
+          exit 1

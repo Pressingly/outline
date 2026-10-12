@@ -1,4 +1,4 @@
-import isEqual from "lodash/isEqual";
+import { isEqual } from "es-toolkit/compat";
 import { computed, observable } from "mobx";
 import Model from "./base/Model";
 import Field from "./decorators/Field";
@@ -6,6 +6,11 @@ import { AfterChange } from "./decorators/Lifecycle";
 
 class Policy extends Model {
   static modelName = "Policy";
+
+  constructor(fields: Record<string, unknown>, store: Model["store"]) {
+    super(fields, store);
+    this.initialize(fields);
+  }
 
   /**
    * An object containing keys representing abilities and values that are either
@@ -18,7 +23,7 @@ class Policy extends Model {
   /**
    * Abilities flattened to an object with boolean values.
    */
-  @computed
+  @computed({ keepAlive: true })
   get flattenedAbilities() {
     const abilities: Record<string, boolean> = {};
     for (const [key, value] of Object.entries(this.abilities)) {

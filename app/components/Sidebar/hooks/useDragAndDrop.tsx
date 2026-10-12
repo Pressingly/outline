@@ -5,8 +5,13 @@ import { useDrag, useDrop } from "react-dnd";
 import { getEmptyImage } from "react-dnd-html5-backend";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { errToString } from "@shared/utils/error";
 import Icon from "@shared/components/Icon";
-import type { NavigationNode } from "@shared/types";
+import {
+  type NavigationNode,
+  type SidebarSection,
+  UserPreference,
+} from "@shared/types";
 import type Collection from "~/models/Collection";
 import type Document from "~/models/Document";
 import type GroupMembership from "~/models/GroupMembership";
@@ -105,6 +110,12 @@ export function useDropToCreateStar(getIndex?: () => string) {
   >({
     accept,
     drop: async (item, monitor) => {
+      // A more specific drop target (e.g. a reorder cursor) has already
+      // handled this drop, so avoid creating a duplicate star.
+      if (monitor.didDrop()) {
+        return;
+      }
+
       const type = monitor.getItemType();
       let model;
 
@@ -122,7 +133,7 @@ export function useDropToCreateStar(getIndex?: () => string) {
       );
     },
     collect: (monitor) => ({
-      isOverCursor: !!monitor.isOver(),
+      isOverCursor: !!monitor.isOver({ shallow: true }),
       isDragging: accept.includes(String(monitor.getItemType())),
     }),
   });
@@ -152,6 +163,63 @@ export function useDropToReorderStar(getIndex?: () => string) {
     collect: (monitor) => ({
       isOverCursor: !!monitor.isOver(),
       isDragging: monitor.getItemType() === "star",
+    }),
+  });
+}
+
+/**
+ * Hook for shared logic that allows dragging a sidebar section by its header.
+ *
+ * @param section The section to drag.
+ * @param title The localized title of the section, shown in the drag preview.
+ */
+export function useDragSidebarSection(
+  section: SidebarSection,
+  title: string
+): [{ isDragging: boolean }, ConnectDragSource] {
+  const [{ isDragging }, draggableRef, preview] = useDrag({
+    type: "sidebarSection",
+    item: () => ({ id: section, title }),
+    collect: (monitor) => ({
+      isDragging: !!monitor.isDragging(),
+    }),
+  });
+
+  React.useEffect(() => {
+    preview(getEmptyImage(), { captureDraggingState: true });
+  }, [preview]);
+
+  return [{ isDragging }, draggableRef];
+}
+
+/**
+ * Hook for shared logic that allows dropping a sidebar section to reorder it,
+ * persisting the new order as a user preference.
+ *
+ * @param getNewOrder A function that returns the section order after dropping the given section here, or undefined when the drop would not change the order.
+ */
+export function useDropToReorderSidebarSection(
+  getNewOrder: (section: SidebarSection) => SidebarSection[] | undefined
+) {
+  const user = useCurrentUser();
+
+  return useDrop<
+    { id: SidebarSection; title: string },
+    void,
+    { isOverCursor: boolean; isDragging: boolean }
+  >({
+    accept: "sidebarSection",
+    drop: (item) => {
+      const order = getNewOrder(item.id);
+      if (order) {
+        user.setPreference(UserPreference.SidebarSectionOrder, order);
+        void user.save();
+      }
+    },
+    canDrop: (item) => !!getNewOrder(item.id),
+    collect: (monitor) => ({
+      isOverCursor: monitor.isOver() && monitor.canDrop(),
+      isDragging: monitor.getItemType() === "sidebarSection",
     }),
   });
 }
@@ -208,7 +276,7 @@ export function useDropToChangeCollection(
   parentRef: React.RefObject<HTMLDivElement>
 ) {
   const { t } = useTranslation();
-  const { documents, collections, dialogs } = useStores();
+  const { documents, collections, dialogs, policies } = useStores();
   const can = usePolicy(collection);
   const startHover = useHover(parentRef, expandNode);
 
@@ -258,12 +326,12 @@ export function useDropToChangeCollection(
               )
             );
           } else {
-            toast.error(err.message);
+            toast.error(errToString(err));
           }
         }
       }
     },
-    canDrop: () => can.createDocument,
+    canDrop: (item) => can.createDocument && !!policies.abilities(item.id).move,
     hover: (_, monitor) => {
       if (
         collection.hasDocuments &&
@@ -293,7 +361,7 @@ export function useDropToReparentDocument(
   parentRef: React.RefObject<HTMLDivElement>
 ) {
   const { t } = useTranslation();
-  const { documents, collections, dialogs } = useStores();
+  const { documents, collections, dialogs, policies } = useStores();
   const hasChildDocuments = !!node?.children.length;
   const document = node ? documents.get(node.id) : undefined;
   const pathToNode = React.useMemo(
@@ -303,11 +371,7 @@ export function useDropToReparentDocument(
 
   const startHover = useHover(parentRef, setExpanded);
 
-  return useDrop<
-    DragObject,
-    Promise<void>,
-    { isOverReparent: boolean; canDropToReparent: boolean }
-  >({
+  return useDrop<DragObject, Promise<void>, { isOverReparent: boolean }>({
     accept: "document",
     drop: async (item, monitor) => {
       if (monitor.didDrop() || !node) {
@@ -353,13 +417,13 @@ export function useDropToReparentDocument(
               )
             );
           } else {
-            toast.error(err.message);
+            toast.error(errToString(err));
           }
         }
       }
     },
     canDrop: (item) => {
-      if (!node || item.id === node.id) {
+      if (!node || item.id === node.id || !policies.abilities(item.id).move) {
         return false;
       }
 
@@ -382,9 +446,11 @@ export function useDropToReparentDocument(
         startHover();
       }
     },
+    // Collected values must stay unchanged while the target is not hovered.
+    // Collecting global drag state (e.g. a bare canDrop) re-renders every
+    // sidebar row at drag start and drop.
     collect: (monitor) => ({
-      isOverReparent: monitor.isOver({ shallow: true }),
-      canDropToReparent: monitor.canDrop(),
+      isOverReparent: monitor.isOver({ shallow: true }) && monitor.canDrop(),
     }),
   });
 }
@@ -409,21 +475,31 @@ export function useDropToReorderDocument(
       }
 ) {
   const { t } = useTranslation();
-  const { documents, collections, dialogs } = useStores();
+  const { documents, collections, dialogs, policies } = useStores();
 
   const document = documents.get(node.id);
 
-  return useDrop<
-    DragObject,
-    Promise<void>,
-    { isOverReorder: boolean; isDraggingAnyDocument: boolean }
-  >({
+  return useDrop<DragObject, Promise<void>, { isOverReorder: boolean }>({
     accept: "document",
     canDrop: (item: DragObject) => {
-      if (item.id === node.id || (document && !document.isActive)) {
+      if (
+        (document && !document.isActive) ||
+        !policies.abilities(item.id).move
+      ) {
         return false;
       }
-      return true;
+      if (item.id !== node.id) {
+        return true;
+      }
+      // A document can only be dropped on its own cursor when that moves it to
+      // a different parent, e.g. out of the end of an expanded subtree.
+      const params = getMoveParams(item);
+      return (
+        !!params &&
+        params.parentDocumentId !== item.id &&
+        (params.parentDocumentId ?? null) !==
+          (document?.parentDocumentId ?? null)
+      );
     },
     drop: async (item) => {
       if (!collection?.isManualSort && item.collectionId === collection?.id) {
@@ -466,15 +542,17 @@ export function useDropToReorderDocument(
                 })
               );
             } else {
-              toast.error(err.message);
+              toast.error(errToString(err));
             }
           }
         }
       }
     },
+    // Collected values must stay unchanged while the target is not hovered.
+    // Collecting global drag state (e.g. a bare canDrop) re-renders every
+    // sidebar row at drag start and drop.
     collect: (monitor) => ({
-      isOverReorder: monitor.isOver(),
-      isDraggingAnyDocument: monitor.canDrop(),
+      isOverReorder: monitor.isOver() && monitor.canDrop(),
     }),
   });
 }
@@ -603,7 +681,7 @@ export function useDropToUnpublish() {
           })
         );
       } catch (err) {
-        toast.error(err.message);
+        toast.error(errToString(err));
       }
     },
     canDrop: (item) => {

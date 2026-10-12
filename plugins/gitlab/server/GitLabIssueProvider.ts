@@ -1,3 +1,4 @@
+import { toError } from "@shared/utils/error";
 import type { IssueSource } from "@shared/schema";
 import { IntegrationService, type IntegrationType } from "@shared/types";
 import Logger from "@server/logging/Logger";
@@ -69,7 +70,7 @@ export class GitLabIssueProvider extends BaseIssueProvider {
         }))
       );
     } catch (err) {
-      Logger.warn("Failed to fetch projects from GitLab", err);
+      Logger.warn("Failed to fetch projects from GitLab", toError(err));
     }
 
     return sources;
@@ -217,7 +218,7 @@ export class GitLabIssueProvider extends BaseIssueProvider {
           integration.changed("issueSources", true);
           await integration.save({ transaction });
         } else if (payload.user_id) {
-          await integration.destroy();
+          await integration.destroy({ transaction });
         }
       }
     });

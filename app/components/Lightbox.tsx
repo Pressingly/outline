@@ -2,7 +2,12 @@ import { observer } from "mobx-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import type { Keyframes } from "styled-components";
 import styled, { css, keyframes } from "styled-components";
-import type { ComponentProps, HTMLAttributes, ReactNode } from "react";
+import type {
+  ComponentProps,
+  HTMLAttributes,
+  ReactNode,
+  SyntheticEvent,
+} from "react";
 import {
   createContext,
   forwardRef,
@@ -10,6 +15,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
 } from "react";
@@ -18,6 +24,7 @@ import { Error as ImageError } from "@shared/editor/components/Image";
 import {
   BackIcon,
   CloseIcon,
+  CommentIcon,
   CrossIcon,
   DownloadIcon,
   LinkIcon,
@@ -40,7 +47,7 @@ import CopyToClipboard from "./CopyToClipboard";
 import { Separator } from "./Actions";
 import useSwipe from "~/hooks/useSwipe";
 import { toast } from "sonner";
-import { findIndex } from "lodash";
+import { findIndex } from "es-toolkit/compat";
 import type { LightboxImage } from "@shared/editor/lib/Lightbox";
 import type { ReactZoomPanPinchRef } from "react-zoom-pan-pinch";
 import {
@@ -55,28 +62,18 @@ import { NodeSelection } from "prosemirror-state";
 import { ImageSource } from "@shared/editor/lib/FileHelper";
 import Desktop from "~/utils/Desktop";
 import { HStack } from "./primitives/HStack";
-
-export enum LightboxStatus {
-  READY_TO_OPEN,
-  OPENING,
-  OPENED,
-  READY_TO_CLOSE,
-  CLOSING,
-  CLOSED,
-}
-
-export enum ImageStatus {
-  LOADING,
-  ERROR,
-  LOADED,
-  MIN_ZOOM,
-  MAX_ZOOM,
-  ZOOMED,
-}
-type Status = {
-  lightbox: LightboxStatus | null;
-  image: ImageStatus | null;
-};
+import { useDocumentContext } from "./DocumentContext";
+import LightboxComments from "~/scenes/Document/components/Comments/LightboxComments";
+import { PortalContext } from "./Portal";
+import useCurrentUser from "~/hooks/useCurrentUser";
+import useHideElement from "~/hooks/useHideElement";
+import type { Status } from "./LightboxState";
+import {
+  ImageStatus,
+  LightboxStatus,
+  initialStatus,
+  reducer,
+} from "./LightboxState";
 
 type Animation = {
   fadeIn?: { apply: () => Keyframes; duration: number };
@@ -87,6 +84,44 @@ type Animation = {
 };
 
 const ANIMATION_DURATION = 0.3 * Second.ms;
+
+/**
+ * Converts an SVG data URL, as produced by the diagram and mermaid embeds, into
+ * a blob that can be downloaded.
+ *
+ * @param dataURL The data URL to convert.
+ * @returns The blob, or undefined if the URL is not an SVG data URL.
+ */
+const svgDataURLToBlob = (dataURL: string) => {
+  // Match the SVG data URL format (with or without charset)
+  const match = dataURL.match(
+    /^data:image\/svg\+xml(?:;charset=utf-8)?,(.*)$/i
+  );
+  if (!match) {
+    return;
+  }
+
+  const encodedSVGData = match[1];
+  const decodedSVGData = decodeURIComponent(encodedSVGData);
+
+  // Convert string to Uint8Array
+  const uint8 = new Uint8Array(decodedSVGData.length);
+  for (let i = 0; i < decodedSVGData.length; ++i) {
+    uint8[i] = decodedSVGData.charCodeAt(i);
+  }
+
+  // Create and return the Blob
+  return new Blob([uint8], { type: "image/svg+xml" });
+};
+
+/**
+ * Stops a React synthetic event from propagating to ancestor handlers, including
+ * Radix Dialog's outside-interaction detection and the editor's own click
+ * handlers, so the comments sidebar can manage its own focus.
+ */
+const stopPropagation = (event: SyntheticEvent) => {
+  event.stopPropagation();
+};
 
 type Props = {
   /** List of allowed images */
@@ -224,7 +259,12 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
   const imgRef = useRef<HTMLImageElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
-  const [status, setStatus] = useState<Status>({ lightbox: null, image: null });
+  const [status, dispatch] = useReducer(reducer, initialStatus);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [commentsRendered, setCommentsRendered] = useState(false);
+  const [commentsVisible, setCommentsVisible] = useState(false);
+  const [commentsPortalEl, setCommentsPortalEl] =
+    useState<HTMLDivElement | null>(null);
   const animation = useRef<Animation | null>(null);
   const finalImage = useRef<{
     center: { x: number; y: number };
@@ -233,95 +273,52 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
   } | null>(null);
   const zoomPanPinchRef = useRef<ReactZoomPanPinchRef>(null);
   const editor = useEditor();
+  const user = useCurrentUser({ rejectOnEmpty: false });
+  const { document: contextDocument } = useDocumentContext();
+  const activeNode = editor?.view?.state?.doc?.nodeAt(activeImage.pos);
+  // Comments are unavailable without a signed in session, for example when
+  // viewing a publicly shared document.
+  const canShowComments =
+    !!user && !!contextDocument && activeNode?.type.name === "image";
 
   const currentImageIndex = findIndex(
     images,
     (img) => img.pos === activeImage.pos
   );
 
-  // Debugging status changes
-  // useEffect(() => {
-  //   console.log(
-  //     `lstat:${status.lightbox === null ? status.lightbox : LightboxStatus[status.lightbox]}, istat:${status.image === null ? status.image : ImageStatus[status.image]}`
-  //   );
-  // }, [status]);
-
-  useEffect(
-    () => () => {
-      if (status.lightbox === LightboxStatus.CLOSED) {
-        onClose();
-      }
-    },
-    [status.lightbox]
+  const handleImageLoading = useCallback(
+    () => dispatch({ type: "imageLoading" }),
+    []
+  );
+  const handleImageLoad = useCallback(
+    () => dispatch({ type: "imageLoaded" }),
+    []
+  );
+  const handleImageError = useCallback(
+    () => dispatch({ type: "imageErrored" }),
+    []
+  );
+  const handleMinZoom = useCallback(
+    () => dispatch({ type: "zoomChanged", zoom: ImageStatus.MIN_ZOOM }),
+    []
+  );
+  const handleZoom = useCallback(
+    () => dispatch({ type: "zoomChanged", zoom: ImageStatus.ZOOMED }),
+    []
+  );
+  const handleMaxZoom = useCallback(
+    () => dispatch({ type: "zoomChanged", zoom: ImageStatus.MAX_ZOOM }),
+    []
   );
 
+  // Keep the latest callbacks in a ref so the close sequence can fire them
+  // without re-running when the caller passes new function identities.
+  const callbacks = useRef({ onUpdate, onClose });
   useEffect(() => {
-    setStatus({
-      lightbox: LightboxStatus.READY_TO_OPEN,
-      image: status.image,
-    });
-  }, []);
+    callbacks.current = { onUpdate, onClose };
+  });
 
-  useEffect(() => {
-    if (status.image === ImageStatus.LOADED) {
-      rememberImagePosition();
-    }
-  }, [status.image]);
-
-  useEffect(() => {
-    if (
-      (status.image === ImageStatus.ERROR ||
-        status.image === ImageStatus.LOADED) &&
-      status.lightbox === LightboxStatus.READY_TO_OPEN
-    ) {
-      setupFadeIn();
-      setupZoomIn();
-      setStatus({
-        lightbox: LightboxStatus.OPENING,
-        image: status.image,
-      });
-    }
-  }, [status.image, status.lightbox]);
-
-  useEffect(() => {
-    if (
-      status.lightbox === LightboxStatus.OPENED &&
-      status.image === ImageStatus.LOADED
-    ) {
-      setStatus({
-        lightbox: LightboxStatus.OPENED,
-        image: ImageStatus.MIN_ZOOM,
-      });
-    }
-  }, [status.lightbox, status.image]);
-
-  useEffect(() => {
-    if (status.lightbox === LightboxStatus.READY_TO_CLOSE) {
-      setupFadeOut();
-      setupZoomOut();
-      setStatus({
-        lightbox: LightboxStatus.CLOSING,
-        image: status.image,
-      });
-    }
-  }, [status.lightbox]);
-
-  useEffect(() => {
-    if (status.lightbox === LightboxStatus.CLOSED) {
-      onUpdate(null);
-    }
-  }, [status.lightbox]);
-
-  useEffect(() => {
-    if (status.image === ImageStatus.MIN_ZOOM) {
-      // It was observed that focus went to `body` as the zoom out button was disabled
-      // upon clicking it. This stopped navigating to next/previous image using arrow keys.
-      // So focusing the content div here to restore the functionality.
-      contentRef.current?.focus();
-    }
-  }, [status.image]);
-
-  const rememberImagePosition = () => {
+  const rememberImagePosition = useCallback(() => {
     if (imgRef.current) {
       const lightboxImgDOMRect = imgRef.current.getBoundingClientRect();
       const {
@@ -339,9 +336,9 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
         height: lightboxImgHeight,
       };
     }
-  };
+  }, []);
 
-  const setupZoomIn = () => {
+  const setupZoomIn = useCallback(() => {
     if (imgRef.current) {
       // in editor
       const editorImageEl = activeImage.getElement();
@@ -397,32 +394,32 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
         `;
       };
       animation.current = {
-        ...(animation.current ?? {}),
+        ...animation.current,
         zoomOut: undefined,
         zoomIn: { apply: zoomIn, duration: ANIMATION_DURATION },
       };
     }
-  };
+  }, [activeImage]);
 
-  const setupFadeIn = () => {
+  const setupFadeIn = useCallback(() => {
     const fadeIn = () => keyframes`
                     from { opacity: 0; }
                     to { opacity: 1; }
                     `;
     animation.current = {
-      ...(animation.current ?? {}),
+      ...animation.current,
       fadeIn: { apply: fadeIn, duration: ANIMATION_DURATION },
       fadeOut: undefined,
     };
-  };
+  }, []);
 
-  const setupFadeOut = () => {
+  const setupFadeOut = useCallback(() => {
     const fadeOut = () => keyframes`
               from { opacity: ${overlayRef.current ? window.getComputedStyle(overlayRef.current).opacity : 1}; }
               to { opacity: 0; }
               `;
     animation.current = {
-      ...(animation.current ?? {}),
+      ...animation.current,
       fadeIn: undefined,
       fadeOut: {
         apply: fadeOut,
@@ -431,9 +428,9 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
           : ANIMATION_DURATION,
       },
     };
-  };
+  }, []);
 
-  const setupZoomOut = () => {
+  const setupZoomOut = useCallback(() => {
     if (
       imgRef.current &&
       !(
@@ -441,6 +438,10 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
         status.image === ImageStatus.MAX_ZOOM
       )
     ) {
+      // Refresh the cached natural image position to account for any layout
+      // changes (e.g., the comments sidebar opening) since the image loaded.
+      rememberImagePosition();
+
       // in lightbox
       const lightboxImgDOMRect = imgRef.current.getBoundingClientRect();
       const {
@@ -520,7 +521,7 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
         `;
       };
       animation.current = {
-        ...(animation.current ?? {}),
+        ...animation.current,
         zoomIn: undefined,
         zoomOut: {
           apply: zoomOut,
@@ -530,7 +531,98 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
         },
       };
     }
-  };
+  }, [activeImage, status.image, rememberImagePosition]);
+
+  useEffect(() => {
+    dispatch({ type: "mounted" });
+  }, []);
+
+  // Notify the caller once a completed close unmounts the lightbox. The cleanup
+  // captures the status at the time it was registered, so it only fires when
+  // the lightbox is torn down having already reached CLOSED.
+  useEffect(
+    () => () => {
+      if (status.lightbox === LightboxStatus.CLOSED) {
+        callbacks.current.onClose();
+      }
+    },
+    [status.lightbox]
+  );
+
+  // The image position and the opening keyframes are measured after the loaded
+  // image has been laid out, so they cannot be folded into the reducer.
+  useEffect(() => {
+    // MIN_ZOOM as well as LOADED, as the status settles straight to MIN_ZOOM
+    // when navigating to another image with the lightbox already open. Both
+    // mean the image is resting at its natural size, which is what is cached.
+    if (
+      status.image === ImageStatus.LOADED ||
+      status.image === ImageStatus.MIN_ZOOM
+    ) {
+      rememberImagePosition();
+    }
+
+    if (
+      (status.image === ImageStatus.ERROR ||
+        status.image === ImageStatus.LOADED) &&
+      status.lightbox === LightboxStatus.READY_TO_OPEN
+    ) {
+      setupFadeIn();
+      setupZoomIn();
+      dispatch({ type: "openAnimationPrepared" });
+    }
+  }, [
+    status.image,
+    status.lightbox,
+    rememberImagePosition,
+    setupFadeIn,
+    setupZoomIn,
+  ]);
+
+  useEffect(() => {
+    if (status.lightbox === LightboxStatus.READY_TO_CLOSE) {
+      setupFadeOut();
+      setupZoomOut();
+      dispatch({ type: "closeAnimationPrepared" });
+    }
+  }, [status.lightbox, setupFadeOut, setupZoomOut]);
+
+  useEffect(() => {
+    if (status.lightbox === LightboxStatus.CLOSED) {
+      callbacks.current.onUpdate(null);
+    }
+  }, [status.lightbox]);
+
+  useEffect(() => {
+    if (commentsOpen) {
+      setCommentsRendered(true);
+      const frame = window.requestAnimationFrame(() =>
+        setCommentsVisible(true)
+      );
+      return () => window.cancelAnimationFrame(frame);
+    }
+    setCommentsVisible(false);
+    const timer = window.setTimeout(() => setCommentsRendered(false), 200);
+    return () => window.clearTimeout(timer);
+  }, [commentsOpen]);
+
+  useEffect(() => {
+    if (status.image === ImageStatus.MIN_ZOOM) {
+      // It was observed that focus went to `body` as the zoom out button was disabled
+      // upon clicking it. This stopped navigating to next/previous image using arrow keys.
+      // So focusing the content div here to restore the functionality.
+      contentRef.current?.focus();
+    }
+  }, [status.image]);
+
+  // Hide the inline image in the editor while the lightbox zoom transition is
+  // active, otherwise a duplicate is visible behind the fading overlay.
+  useHideElement(
+    activeImage.getElement(),
+    status.lightbox !== null &&
+      status.lightbox !== LightboxStatus.READY_TO_OPEN &&
+      status.lightbox !== LightboxStatus.CLOSED
+  );
 
   const prev = () => {
     if (
@@ -560,89 +652,75 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
     }
   };
 
-  const close = () => {
-    if (
-      status.lightbox === LightboxStatus.OPENING ||
-      status.lightbox === LightboxStatus.OPENED
-    ) {
-      setStatus({
-        lightbox: LightboxStatus.READY_TO_CLOSE,
-        image: status.image,
-      });
-    }
-  };
+  const close = useCallback(() => {
+    dispatch({ type: "closeRequested" });
+  }, []);
 
-  const svgDataURLToBlob = (dataURL: string) => {
-    // Match the SVG data URL format (with or without charset)
-    const match = dataURL.match(
-      /^data:image\/svg\+xml(?:;charset=utf-8)?,(.*)$/i
-    );
-    if (!match) {
-      return;
-    }
+  const downloadImage = useCallback(
+    async (src: string, saveAs: string) => {
+      let imageBlob;
+      if (isInternalUrl(src)) {
+        const image = await fetch(src);
+        imageBlob = await image.blob();
+      } else {
+        // Assuming it's a mermaid svg
+        imageBlob = svgDataURLToBlob(src);
+      }
 
-    const encodedSVGData = match[1];
-    const decodedSVGData = decodeURIComponent(encodedSVGData);
+      if (!imageBlob) {
+        toast.error(t("Unable to download image"));
+        return;
+      }
 
-    // Convert string to Uint8Array
-    const uint8 = new Uint8Array(decodedSVGData.length);
-    for (let i = 0; i < decodedSVGData.length; ++i) {
-      uint8[i] = decodedSVGData.charCodeAt(i);
-    }
+      const imageURL = URL.createObjectURL(imageBlob);
+      const name = saveAs || "image";
+      const extension = imageBlob.type.split(/\/|\+/g)[1];
 
-    // Create and return the Blob
-    return new Blob([uint8], { type: "image/svg+xml" });
-  };
+      // create a temporary link node and click it with our image data
+      const link = document.createElement("a");
+      link.href = imageURL;
+      link.download = `${name}.${extension}`;
+      document.body.appendChild(link);
+      link.click();
 
-  const downloadImage = async (src: string, saveAs: string) => {
-    let imageBlob;
-    if (isInternalUrl(src)) {
-      const image = await fetch(src);
-      imageBlob = await image.blob();
-    } else {
-      // Assuming it's a mermaid svg
-      imageBlob = svgDataURLToBlob(src);
-    }
-
-    if (!imageBlob) {
-      toast.error(t("Unable to download image"));
-      return;
-    }
-
-    const imageURL = URL.createObjectURL(imageBlob);
-    const name = saveAs || "image";
-    const extension = imageBlob.type.split(/\/|\+/g)[1];
-
-    // create a temporary link node and click it with our image data
-    const link = document.createElement("a");
-    link.href = imageURL;
-    link.download = `${name}.${extension}`;
-    document.body.appendChild(link);
-    link.click();
-
-    // cleanup
-    document.body.removeChild(link);
-    URL.revokeObjectURL(imageURL);
-  };
+      // cleanup
+      document.body.removeChild(link);
+      URL.revokeObjectURL(imageURL);
+    },
+    [t]
+  );
 
   const handleDownload = useCallback(() => {
     if (activeImage && status.lightbox === LightboxStatus.OPENED) {
       void downloadImage(activeImage.src, activeImage.alt);
     }
-  }, [activeImage, status.lightbox]);
+  }, [activeImage, status.lightbox, downloadImage]);
 
   const handleKeyDown = (ev: React.KeyboardEvent<HTMLDivElement>) => {
-    ev.preventDefault();
+    // Don't intercept keys while typing into an input, textarea, or editor.
+    const target = ev.target as HTMLElement | null;
+    if (
+      target &&
+      target !== ev.currentTarget &&
+      (target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable)
+    ) {
+      return;
+    }
     switch (ev.key) {
       case "ArrowLeft": {
+        ev.preventDefault();
         prev();
         break;
       }
       case "ArrowRight": {
+        ev.preventDefault();
         next();
         break;
       }
       case "Escape": {
+        ev.preventDefault();
         close();
         break;
       }
@@ -652,7 +730,7 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
   const handleFadeStart = () => {
     if (animation.current?.fadeIn) {
       animation.current = {
-        ...(animation.current ?? {}),
+        ...animation.current,
         startTime: Date.now(),
       };
     }
@@ -661,31 +739,25 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
   const handleFadeEnd = () => {
     if (animation.current?.fadeIn) {
       animation.current = {
-        ...(animation.current ?? {}),
+        ...animation.current,
         zoomIn: undefined,
         fadeIn: undefined,
         startTime: undefined,
       };
-      setStatus({
-        lightbox: LightboxStatus.OPENED,
-        image: status.image,
-      });
+      dispatch({ type: "openAnimationEnded" });
     } else if (animation.current?.fadeOut) {
-      setStatus({
-        lightbox: LightboxStatus.CLOSED,
-        image: null,
-      });
+      dispatch({ type: "closeAnimationEnded" });
     }
   };
 
   const handleEditDiagram = () => {
-    const { state, dispatch } = editor.view;
+    const { state, dispatch: dispatchTransaction } = editor.view;
 
     // Select the node at the position
     const tr = state.tr.setSelection(
       NodeSelection.create(state.doc, activeImage.pos)
     );
-    dispatch(tr);
+    dispatchTransaction(tr);
     editor.commands.editDiagram();
   };
 
@@ -698,14 +770,21 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
           onAnimationStart={handleFadeStart}
           onAnimationEnd={handleFadeEnd}
         />
-        <StyledContent onKeyDown={handleKeyDown} ref={contentRef}>
+        <StyledContent
+          onKeyDown={handleKeyDown}
+          ref={contentRef}
+          $commentsOpen={canShowComments && commentsOpen}
+        >
           <VisuallyHidden.Root>
             <Dialog.Title>{t("Lightbox")}</Dialog.Title>
             <Dialog.Description>
               {t("View, navigate, or download images in the document")}
             </Dialog.Description>
           </VisuallyHidden.Root>
-          <Actions animation={animation.current}>
+          <Actions
+            animation={animation.current}
+            $commentsOpen={canShowComments && commentsOpen}
+          >
             <Tooltip content={t("Zoom in")} placement="bottom">
               <ActionButton
                 tabIndex={-1}
@@ -788,7 +867,22 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
                   />
                 </Tooltip>
               )}
-            <Separator />
+            {canShowComments && (
+              <Tooltip content={t("Comments")} placement="bottom">
+                <ActionButton
+                  tabIndex={-1}
+                  onClick={() => setCommentsOpen((open) => !open)}
+                  aria-label={t("Comments")}
+                  aria-pressed={commentsOpen}
+                  size={32}
+                  icon={<CommentIcon />}
+                  borderOnHover
+                  neutral
+                />
+              </Tooltip>
+            )}
+          </Actions>
+          <CloseAction animation={animation.current}>
             <Dialog.Close asChild>
               <Tooltip content={t("Close")} shortcut="Esc" placement="bottom">
                 <ActionButton
@@ -802,7 +896,7 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
                 />
               </Tooltip>
             </Dialog.Close>
-          </Actions>
+          </CloseAction>
           {currentImageIndex > 0 &&
             !(
               status.image === ImageStatus.ZOOMED ||
@@ -829,48 +923,18 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
               ref={imgRef}
               src={activeImage.src}
               alt={activeImage.alt}
-              onLoading={() =>
-                setStatus({
-                  lightbox: status.lightbox,
-                  image: ImageStatus.LOADING,
-                })
-              }
-              onLoad={() =>
-                setStatus({
-                  lightbox: status.lightbox,
-                  image: ImageStatus.LOADED,
-                })
-              }
-              onError={() =>
-                setStatus({
-                  lightbox: status.lightbox,
-                  image: ImageStatus.ERROR,
-                })
-              }
+              onLoading={handleImageLoading}
+              onLoad={handleImageLoad}
+              onError={handleImageError}
               onSwipeRight={prev}
               onSwipeLeft={next}
               onSwipeUp={close}
               onSwipeDown={close}
               status={status}
               animation={animation.current}
-              onMinZoom={() => {
-                setStatus({
-                  lightbox: status.lightbox,
-                  image: ImageStatus.MIN_ZOOM,
-                });
-              }}
-              onZoom={() =>
-                setStatus({
-                  lightbox: status.lightbox,
-                  image: ImageStatus.ZOOMED,
-                })
-              }
-              onMaxZoom={() =>
-                setStatus({
-                  lightbox: status.lightbox,
-                  image: ImageStatus.MAX_ZOOM,
-                })
-              }
+              onMinZoom={handleMinZoom}
+              onZoom={handleZoom}
+              onMaxZoom={handleMaxZoom}
             />
           </ZoomablePannablePinchable>
           {currentImageIndex < images.length - 1 &&
@@ -878,12 +942,36 @@ function Lightbox({ images, activeImage, onUpdate, onClose, readOnly }: Props) {
               status.image === ImageStatus.ZOOMED ||
               status.image === ImageStatus.MAX_ZOOM
             ) && (
-              <Nav dir="right" $hidden={isIdle} animation={animation.current}>
+              <Nav
+                dir="right"
+                $hidden={isIdle}
+                animation={animation.current}
+                $commentsOpen={canShowComments && commentsOpen}
+              >
                 <NavButton onClick={next} size={32} aria-label={t("Next")}>
                   <NextIcon size={32} />
                 </NavButton>
               </Nav>
             )}
+          {canShowComments && commentsRendered && contextDocument && (
+            <CommentsSidebar
+              ref={setCommentsPortalEl}
+              animation={animation.current}
+              $open={commentsVisible}
+              onPointerDown={stopPropagation}
+              onPointerUp={stopPropagation}
+              onMouseDown={stopPropagation}
+              onMouseUp={stopPropagation}
+              onClick={stopPropagation}
+            >
+              <PortalContext.Provider value={commentsPortalEl}>
+                <LightboxComments
+                  document={contextDocument}
+                  pos={activeImage.pos}
+                />
+              </PortalContext.Provider>
+            </CommentsSidebar>
+          )}
         </StyledContent>
       </Dialog.Portal>
     </Dialog.Root>
@@ -960,14 +1048,13 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image_(
 
   useEffect(() => {
     onLoading();
-  }, [src]);
+  }, [src, onLoading]);
 
+  // Anything past loading means there is something to show. This deliberately
+  // does not test for LOADED specifically, as the status can settle straight to
+  // MIN_ZOOM when the lightbox is already open and a new image is navigated to.
   useEffect(() => {
-    if (status.image === null || status.image === ImageStatus.LOADING) {
-      setHidden(true);
-    } else if (status.image === ImageStatus.LOADED) {
-      setHidden(false);
-    }
+    setHidden(status.image === null || status.image === ImageStatus.LOADING);
   }, [status.image]);
 
   return status.image === ImageStatus.ERROR ? (
@@ -1090,7 +1177,7 @@ const StyledImg = styled.img<{
           : ""}
 `;
 
-const StyledContent = styled(Dialog.Content)`
+const StyledContent = styled(Dialog.Content)<{ $commentsOpen: boolean }>`
   position: fixed;
   inset: 0;
   z-index: ${depths.modal};
@@ -1098,6 +1185,8 @@ const StyledContent = styled(Dialog.Content)`
   justify-content: center;
   align-items: center;
   outline: none;
+  padding-inline-end: ${(props) => (props.$commentsOpen ? "360px" : "0")};
+  transition: padding-inline-end 200ms ease-out;
 `;
 
 const ActionButton = styled(Button)`
@@ -1106,12 +1195,42 @@ const ActionButton = styled(Button)`
 
 const Actions = styled(HStack)<{
   animation: Animation | null;
+  $commentsOpen: boolean;
 }>`
   position: absolute;
   top: 0;
-  right: 0;
+  right: ${(props) => (props.$commentsOpen ? "360px" : "44px")};
   margin: 16px 12px;
   z-index: ${depths.modal};
+  background: ${(props) => transparentize(0.2, props.theme.background)};
+  backdrop-filter: blur(4px);
+  border-radius: 6px;
+  transition: right 200ms ease-out;
+
+  ${(props) =>
+    props.animation === null
+      ? css`
+          opacity: 0;
+        `
+      : props.animation.fadeIn
+        ? css`
+            animation: ${props.animation.fadeIn.apply()}
+              ${props.animation.fadeIn.duration}ms;
+          `
+        : props.animation.fadeOut
+          ? css`
+              animation: ${props.animation.fadeOut.apply()}
+                ${props.animation.fadeOut.duration}ms;
+            `
+          : ""}
+`;
+
+const CloseAction = styled.div<{ animation: Animation | null }>`
+  position: fixed;
+  top: 0;
+  right: 0;
+  margin: 16px 12px;
+  z-index: ${depths.modal + 1};
   background: ${(props) => transparentize(0.2, props.theme.background)};
   backdrop-filter: blur(4px);
   border-radius: 6px;
@@ -1138,10 +1257,16 @@ const Nav = styled.div<{
   $hidden: boolean;
   dir: "left" | "right";
   animation: Animation | null;
+  $commentsOpen?: boolean;
 }>`
   position: absolute;
-  ${(props) => (props.dir === "left" ? "left: 0;" : "right: 0;")}
-  transition: opacity 500ms ease-in-out;
+  ${(props) =>
+    props.dir === "left"
+      ? "left: 0;"
+      : `right: ${props.$commentsOpen ? "360px" : "0"};`}
+  transition:
+    opacity 500ms ease-in-out,
+    right 200ms ease-out;
   z-index: ${depths.modal};
   ${(props) => props.$hidden && "opacity: 0;"}
   ${(props) =>
@@ -1181,6 +1306,27 @@ const StyledError = styled(ImageError)<{
                 ${props.animation.fadeOut.duration}ms;
             `
           : ""}
+`;
+
+const CommentsSidebar = styled.div<{
+  animation: Animation | null;
+  $open: boolean;
+}>`
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: ${depths.modal};
+  display: flex;
+  transform: translateX(${(props) => (props.$open ? "0" : "100%")});
+  transition: transform 200ms ease-out;
+  ${(props) =>
+    props.animation?.fadeOut
+      ? css`
+          animation: ${props.animation.fadeOut.apply()}
+            ${props.animation.fadeOut.duration}ms;
+        `
+      : ""}
 `;
 
 const NavButton = styled(NudeButton)`
