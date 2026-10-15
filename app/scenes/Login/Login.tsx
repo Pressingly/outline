@@ -1,4 +1,4 @@
-import find from "lodash/find";
+import { find } from "es-toolkit/compat";
 import { observer } from "mobx-react";
 import { EmailIcon } from "outline-icons";
 import * as React from "react";
@@ -40,8 +40,12 @@ import { BackButton } from "./components/BackButton";
 import { Background } from "./components/Background";
 import { Centered } from "./components/Centered";
 import { Notices } from "./components/Notices";
-import { getRedirectUrl, navigateToSubdomain } from "./urls";
+import { PasskeyAuthenticationProvider } from "./components/PasskeyAuthenticationProvider";
+import { SigningIn } from "./components/SigningIn";
+import { SwitchHostButton } from "./components/SwitchHostButton";
+import { navigateToSubdomain } from "./urls";
 import lazyWithRetry from "~/utils/lazyWithRetry";
+import { getRedirectUrl } from "~/utils/urls";
 
 const WorkspaceSetup = lazyWithRetry(
   () => import("./components/WorkspaceSetup")
@@ -70,19 +74,39 @@ function Login({ children, onBack }: Props) {
   );
   const [lastVisitedPath] = useLastVisitedPath();
   const [spendPostLoginPath] = usePostLoginPath();
+  const hasRedirectedToOidc = React.useRef(false);
+
+  const shouldRedirectToOidc =
+    !auth.authenticated &&
+    !auth.isFetching &&
+    config?.providers.length === 1 &&
+    config.providers[0].id === "oidc" &&
+    !env.OIDC_DISABLE_REDIRECT &&
+    !query.get("notice") &&
+    !query.get("logout");
+
+  React.useEffect(() => {
+    if (shouldRedirectToOidc && !hasRedirectedToOidc.current && config) {
+      hasRedirectedToOidc.current = true;
+      window.location.href = getRedirectUrl(config.providers[0].authUrl);
+    }
+  }, [shouldRedirectToOidc, config]);
 
   const handleReset = React.useCallback(() => {
     setEmailLinkSentTo("");
   }, []);
-  const handleEmailSuccess = React.useCallback((email) => {
+  const handleEmailSuccess = React.useCallback((email: string) => {
     setEmailLinkSentTo(email);
   }, []);
 
-  const handleGoSubdomain = React.useCallback(async (event) => {
-    event.preventDefault();
-    const data = Object.fromEntries(new FormData(event.target));
-    await navigateToSubdomain(data.subdomain as string);
-  }, []);
+  const handleGoSubdomain = React.useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.currentTarget));
+      await navigateToSubdomain(data.subdomain as string);
+    },
+    []
+  );
 
   React.useEffect(() => {
     auth.fetchConfig().catch(setError);
@@ -99,7 +123,19 @@ function Login({ children, onBack }: Props) {
     }
   }, [query]);
 
-  if (auth.authenticated) {
+  // A passkey login initiated from the desktop app must complete the login
+  // ceremony even when this browser already has a session.
+  const isPasskeyLogin = query.get("method") === "passkey";
+
+  // When the desktop app forces a passkey login it opens this page in the
+  // system browser, where the ceremony is triggered automatically. Show the
+  // "Signing in" screen rather than the login buttons.
+  const isDesktopPasskeyRedirect =
+    isPasskeyLogin &&
+    query.get("client") === Client.Desktop &&
+    !Desktop.isElectron();
+
+  if (auth.authenticated && !isPasskeyLogin) {
     const postLoginPath = spendPostLoginPath();
     if (postLoginPath) {
       return <Redirect to={postLoginPath} />;
@@ -121,6 +157,7 @@ function Login({ children, onBack }: Props) {
       <Background>
         <BackButton onBack={onBack} />
         <ChangeLanguage locale={detectLanguage()} />
+        <SwitchHostButton />
         <Centered>
           <PageTitle title={t("Login")} />
           <Heading centered>{t("Error")}</Heading>
@@ -143,6 +180,22 @@ function Login({ children, onBack }: Props) {
   // indicator here that's delayed by 250ms
   if (!config) {
     return <LoadingIndicator />;
+  }
+
+  // The passkey ceremony is triggered automatically here, so render the
+  // "Signing in" screen in place of the login buttons. The passkey provider is
+  // still mounted (hidden) to drive the ceremony and form submission, revealing
+  // a retry button if the ceremony fails.
+  if (isDesktopPasskeyRedirect) {
+    return (
+      <Background>
+        <ChangeLanguage locale={detectLanguage()} />
+        <Centered gap={12}>
+          <SigningIn />
+          <PasskeyAuthenticationProvider />
+        </Centered>
+      </Background>
+    );
   }
 
   const isCustomDomain = parseDomain(window.location.origin).custom;
@@ -270,22 +323,17 @@ function Login({ children, onBack }: Props) {
     );
   }
 
-  // If there is only one provider and it's OIDC, redirect immediately.
-  if (
-    config.providers.length === 1 &&
-    config.providers[0].id === "oidc" &&
-    !env.OIDC_DISABLE_REDIRECT &&
-    !query.get("notice") &&
-    !query.get("logout")
-  ) {
-    window.location.href = getRedirectUrl(config.providers[0].authUrl);
-    return null;
+  // If there is only one provider and it's OIDC, the redirect is performed
+  // from the effect above – render a loading indicator while we wait.
+  if (shouldRedirectToOidc) {
+    return <LoadingIndicator />;
   }
 
   return (
     <Background>
       <BackButton onBack={onBack} config={config} />
       <ChangeLanguage locale={detectLanguage()} />
+      <SwitchHostButton />
 
       <Centered gap={12}>
         <PageTitle

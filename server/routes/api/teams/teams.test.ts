@@ -15,9 +15,8 @@ describe("teams.create", () => {
     const team = await buildTeam();
     const user = await buildAdmin({ teamId: team.id });
     const name = faker.company.name();
-    const res = await server.post("/api/teams.create", {
+    const res = await server.post("/api/teams.create", user, {
       body: {
-        token: user.getJwtToken(),
         name,
       },
     });
@@ -31,9 +30,8 @@ describe("teams.create", () => {
 
     const team = await buildTeam();
     const user = await buildAdmin({ teamId: team.id });
-    const res = await server.post("/api/teams.create", {
+    const res = await server.post("/api/teams.create", user, {
       body: {
-        token: user.getJwtToken(),
         name: faker.company.name(),
       },
     });
@@ -45,9 +43,8 @@ describe("#team.update", () => {
   it("should update team details", async () => {
     const admin = await buildAdmin();
     const name = faker.company.name();
-    const res = await server.post("/api/team.update", {
+    const res = await server.post("/api/team.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         name,
       },
     });
@@ -56,12 +53,49 @@ describe("#team.update", () => {
     expect(body.data.name).toEqual(name);
   });
 
+  it("should update team preferences", async () => {
+    const admin = await buildAdmin();
+    const res = await server.post("/api/team.update", admin, {
+      body: {
+        preferences: {
+          publicBranding: true,
+        },
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.preferences.publicBranding).toBe(true);
+  });
+
+  it("should fail upon sending unknown team preference", async () => {
+    const admin = await buildAdmin();
+    const res = await server.post("/api/team.update", admin, {
+      body: {
+        preferences: {
+          invalidPreference: true,
+        },
+      },
+    });
+    expect(res.status).toEqual(400);
+  });
+
+  it("should fail upon sending a team preference value of the wrong type", async () => {
+    const admin = await buildAdmin();
+    const res = await server.post("/api/team.update", admin, {
+      body: {
+        preferences: {
+          publicBranding: "yes",
+        },
+      },
+    });
+    expect(res.status).toEqual(400);
+  });
+
   it("should add avatar", async () => {
     const team = await buildTeam();
     const admin = await buildAdmin({ teamId: team.id });
-    const res = await server.post("/api/team.update", {
+    const res = await server.post("/api/team.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         avatarUrl: "https://random-url.com",
       },
     });
@@ -73,9 +107,8 @@ describe("#team.update", () => {
   it("should remove avatar", async () => {
     const team = await buildTeam({ avatarUrl: "https://random-url.com" });
     const admin = await buildAdmin({ teamId: team.id });
-    const res = await server.post("/api/team.update", {
+    const res = await server.post("/api/team.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         avatarUrl: null,
       },
     });
@@ -86,9 +119,8 @@ describe("#team.update", () => {
 
   it("should not invalidate request if subdomain is sent as null", async () => {
     const admin = await buildAdmin();
-    const res = await server.post("/api/team.update", {
+    const res = await server.post("/api/team.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         subdomain: null,
       },
     });
@@ -100,9 +132,8 @@ describe("#team.update", () => {
     const admin = await buildAdmin({ teamId: team.id });
     const domain1 = faker.internet.domainName();
     const domain2 = faker.internet.domainName();
-    const res = await server.post("/api/team.update", {
+    const res = await server.post("/api/team.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         allowedDomains: [domain1, "", domain2, "", ""],
       },
     });
@@ -127,9 +158,8 @@ describe("#team.update", () => {
       createdById: admin.id,
     });
 
-    const res = await server.post("/api/team.update", {
+    const res = await server.post("/api/team.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         allowedDomains: [],
       },
     });
@@ -156,9 +186,8 @@ describe("#team.update", () => {
     const domain1 = faker.internet.domainName();
     const domain2 = faker.internet.domainName();
 
-    const res = await server.post("/api/team.update", {
+    const res = await server.post("/api/team.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         allowedDomains: [domain1, domain2],
       },
     });
@@ -177,16 +206,14 @@ describe("#team.update", () => {
 
   it("should only allow member,viewer or admin as default role", async () => {
     const admin = await buildAdmin();
-    const res = await server.post("/api/team.update", {
+    const res = await server.post("/api/team.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         defaultUserRole: "New name",
       },
     });
     expect(res.status).toEqual(400);
-    const successRes = await server.post("/api/team.update", {
+    const successRes = await server.post("/api/team.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         defaultUserRole: "viewer",
       },
     });
@@ -198,9 +225,8 @@ describe("#team.update", () => {
   it("should allow identical team details", async () => {
     const team = await buildTeam();
     const admin = await buildAdmin({ teamId: team.id });
-    const res = await server.post("/api/team.update", {
+    const res = await server.post("/api/team.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         name: team.name,
       },
     });
@@ -211,9 +237,8 @@ describe("#team.update", () => {
 
   it("should require admin", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/team.update", {
+    const res = await server.post("/api/team.update", user, {
       body: {
-        token: user.getJwtToken(),
         name: faker.company.name(),
       },
     });
@@ -227,9 +252,8 @@ describe("#team.update", () => {
 
   it("should not allow setting team name to null", async () => {
     const admin = await buildAdmin();
-    const res = await server.post("/api/team.update", {
+    const res = await server.post("/api/team.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         name: null,
       },
     });
@@ -244,9 +268,8 @@ describe("#team.update", () => {
       userId: admin.id,
     });
 
-    const res = await server.post("/api/team.update", {
+    const res = await server.post("/api/team.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         defaultCollectionId: collection.id,
       },
     });
@@ -268,9 +291,8 @@ describe("#team.update", () => {
       userId: admin.id,
     });
 
-    const res = await server.post("/api/team.update", {
+    const res = await server.post("/api/team.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         defaultCollectionId: collection.id,
       },
     });
@@ -279,9 +301,8 @@ describe("#team.update", () => {
     expect(res.status).toEqual(200);
     expect(body.data.defaultCollectionId).toEqual(collection.id);
 
-    const updateRes = await server.post("/api/collections.update", {
+    const updateRes = await server.post("/api/collections.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: collection.id,
         permission: null,
       },
@@ -289,11 +310,7 @@ describe("#team.update", () => {
 
     expect(updateRes.status).toEqual(200);
 
-    const res3 = await server.post("/api/auth.info", {
-      body: {
-        token: admin.getJwtToken(),
-      },
-    });
+    const res3 = await server.post("/api/auth.info", admin);
     const body3 = await res3.json();
     expect(res3.status).toEqual(200);
     expect(body3.data.team.defaultCollectionId).toEqual(null);

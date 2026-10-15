@@ -1,9 +1,7 @@
 /* oxlint-disable no-console */
 import type { IncomingMessage } from "node:http";
 import { styleText } from "node:util";
-import isArray from "lodash/isArray";
-import isEmpty from "lodash/isEmpty";
-import isObject from "lodash/isObject";
+import { isArray, isEmpty, isObject } from "es-toolkit/compat";
 import winston from "winston";
 import env from "@server/env";
 import Metrics from "@server/logging/Metrics";
@@ -148,9 +146,7 @@ class Logger {
         }
 
         if (request) {
-          scope.addEventProcessor((event) =>
-            Sentry.Handlers.parseRequest(event, request)
-          );
+          scope.setSDKProcessingMetadata({ request });
         }
 
         Sentry.captureException(error);
@@ -229,14 +225,14 @@ class Logger {
       const output: Record<string, any> = { ...input };
 
       for (const key of Object.keys(output)) {
-        if (isObject(output[key])) {
+        if (sensitiveFields.includes(key)) {
+          output[key] = "[Filtered]";
+        } else if (isObject(output[key])) {
           output[key] = this.sanitize(output[key], level + 1);
         } else if (isArray(output[key])) {
           output[key] = output[key].map((value: unknown) =>
             this.sanitize(value, level + 1)
           );
-        } else if (sensitiveFields.includes(key)) {
-          output[key] = "[Filtered]";
         } else {
           output[key] = this.sanitize(output[key], level + 1);
         }

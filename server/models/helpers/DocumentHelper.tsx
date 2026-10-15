@@ -1,4 +1,4 @@
-import { JSDOM } from "jsdom";
+import type { JSDOM } from "jsdom";
 import { Node, Fragment, type NodeType } from "prosemirror-model";
 import ukkonen from "ukkonen";
 import { updateYFragment, yDocToProsemirrorJSON } from "y-prosemirror";
@@ -7,11 +7,13 @@ import {
   ChangesetHelper,
   type ExtendedChange,
 } from "@shared/editor/lib/ChangesetHelper";
+import headingToSlug from "@shared/editor/lib/headingToSlug";
 import textBetween from "@shared/editor/lib/textBetween";
 import { EditorStyleHelper } from "@shared/editor/styles/EditorStyleHelper";
 import type { NavigationNode, ProsemirrorData } from "@shared/types";
-import { IconType, TextEditMode } from "@shared/types";
+import { DocumentPreference, IconType, TextEditMode } from "@shared/types";
 import { determineIconType } from "@shared/utils/icon";
+import { ProsemirrorDataHelper } from "@shared/utils/ProsemirrorDataHelper";
 import { parser, serializer, schema } from "@server/editor";
 import { ValidationError } from "@server/errors";
 import { addTags } from "@server/logging/tracer";
@@ -102,6 +104,24 @@ export class DocumentHelper {
   }
 
   /**
+   * Returns the collaborative state for a document. Documents that have never been opened in a
+   * collaborative session have no state, in which case one is derived from the content, falling
+   * back to Markdown.
+   *
+   * @param document The document to convert
+   * @returns The collaborative state
+   */
+  static toState(document: Document): Uint8Array {
+    if (document.state) {
+      return document.state;
+    }
+
+    return ProsemirrorHelper.toState(
+      ProsemirrorHelper.toYDoc(document.content ?? document.text ?? "")
+    );
+  }
+
+  /**
    * Returns the document as a plain JSON object. This method uses the derived content if available
    * then the collaborative state, otherwise it falls back to Markdown.
    *
@@ -123,7 +143,7 @@ export class DocumentHelper {
     }
   ): Promise<ProsemirrorData> {
     let doc: Node | null;
-    let data;
+    let data: ProsemirrorData;
 
     if ("content" in document && document.content) {
       // Optimized path for documents with content available and no transformation required.
@@ -152,7 +172,7 @@ export class DocumentHelper {
         options.signedUrls
       );
     } else {
-      data = doc?.toJSON() ?? {};
+      data = doc?.toJSON() ?? ProsemirrorDataHelper.getEmpty();
     }
 
     if (options?.internalUrlBase) {
@@ -181,6 +201,86 @@ export class DocumentHelper {
   }
 
   /**
+   * Returns the Markdown content of the section beginning at the heading that
+   * matches the given anchor. A section spans from the matched heading up to
+   * (but not including) the next heading of the same or higher level.
+   *
+   * @param document The document or revision or prosemirror data to extract from
+   * @param anchor The heading anchor to locate, with or without a leading "#"
+   * @returns the section content as Markdown, or undefined if no heading matches.
+   */
+  static getAnchorContent(
+    document: Document | Revision | ProsemirrorData,
+    anchor: string
+  ): string | undefined {
+    let id = anchor.replace(/^#/, "");
+    try {
+      id = decodeURIComponent(id);
+    } catch {
+      // Keep the raw anchor if it cannot be decoded.
+    }
+    if (!id) {
+      return undefined;
+    }
+
+    const node = DocumentHelper.toProsemirror(document);
+
+    // Headings are always top-level nodes, so iterating the document's direct
+    // children is sufficient to locate the section.
+    const children: Node[] = [];
+    node.content.forEach((child) => children.push(child));
+
+    const previouslySeen: Record<string, number> = {};
+    let startIndex = -1;
+    let level = 0;
+
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      if (child.type.name !== "heading") {
+        continue;
+      }
+
+      // Calculate the heading id using the same de-duplication logic as the
+      // editor so that anchors to repeated headings resolve correctly.
+      const slug = headingToSlug(child);
+      const headingId =
+        previouslySeen[slug] > 0
+          ? headingToSlug(child, previouslySeen[slug])
+          : slug;
+      previouslySeen[slug] =
+        previouslySeen[slug] !== undefined ? previouslySeen[slug] + 1 : 1;
+
+      if (startIndex === -1 && headingId === id) {
+        startIndex = i;
+        level = child.attrs.level;
+      }
+    }
+
+    if (startIndex === -1) {
+      return undefined;
+    }
+
+    const sectionNodes: Node[] = [children[startIndex]];
+    for (let i = startIndex + 1; i < children.length; i++) {
+      const child = children[i];
+      if (child.type.name === "heading" && child.attrs.level <= level) {
+        break;
+      }
+      sectionNodes.push(child);
+    }
+
+    const sectionDoc = schema.topNodeType.create(
+      null,
+      Fragment.fromArray(sectionNodes)
+    );
+
+    return serializer
+      .serialize(sectionDoc)
+      .replace(/(^|\n)\\(\n|$)/g, "\n\n")
+      .trim();
+  }
+
+  /**
    * Returns the document as Markdown. This is a lossy conversion and should only be used for export.
    *
    * @param document The document or revision to convert
@@ -196,6 +296,12 @@ export class DocumentHelper {
       signedUrls?: number;
       /** The team context */
       teamId?: string;
+      /**
+       * Whether the Markdown is leaving Outline, in which case portable
+       * CommonMark is written in place of Outline's internal representation
+       * (default: false)
+       */
+      commonMark?: boolean;
     }
   ) {
     let node = DocumentHelper.toProsemirror(document);
@@ -210,12 +316,8 @@ export class DocumentHelper {
     }
 
     const text = serializer
-      .serialize(node)
+      .serialize(node, { commonMark: options?.commonMark })
       .replace(/(^|\n)\\(\n|$)/g, "\n\n")
-      .replace(/“/g, '"')
-      .replace(/”/g, '"')
-      .replace(/‘/g, "'")
-      .replace(/’/g, "'")
       .trim();
 
     if (
@@ -246,7 +348,16 @@ export class DocumentHelper {
     options?: HTMLOptions
   ) {
     const node = DocumentHelper.toProsemirror(model);
-    let output = ProsemirrorHelper.toHTML(node, {
+    // Heading numbering is a preference of the document, which a revision
+    // inherits from the document it belongs to.
+    const document =
+      model instanceof Document
+        ? model
+        : model instanceof Revision
+          ? await model.$get("document")
+          : null;
+
+    let output = await ProsemirrorHelper.toHTML(node, {
       title:
         options?.includeTitle !== false
           ? model instanceof Collection
@@ -260,6 +371,7 @@ export class DocumentHelper {
       baseUrl: options?.baseUrl,
       changes: options?.changes,
       cspNonce: options?.cspNonce,
+      headingPrefix: document?.getPreference(DocumentPreference.HeadingPrefix),
     });
 
     addTags({
@@ -269,9 +381,7 @@ export class DocumentHelper {
 
     if (options?.signedUrls) {
       const teamId =
-        model instanceof Collection || model instanceof Document
-          ? model.teamId
-          : (await model.$get("document"))?.teamId;
+        model instanceof Collection ? model.teamId : document?.teamId;
 
       if (!teamId) {
         return output;
@@ -355,21 +465,62 @@ export class DocumentHelper {
    * @param before The before document
    * @param after The after document
    * @param options Options passed to HTML generation
-   * @returns The diff as a HTML string
+   * @returns The diff as an HTML string, an empty string when there is no
+   * before document, or undefined when the documents contain no changes or
+   * the changeset was too expensive to compute.
    */
   static async toEmailDiff(
     before: Document | Revision | null,
     after: Revision,
     options?: HTMLOptions
-  ) {
+  ): Promise<string | undefined> {
     if (!before) {
       return "";
     }
 
-    const html = await DocumentHelper.diff(before, after, options);
-    const dom = new JSDOM(html);
-    const doc = dom.window.document;
+    addTags({
+      beforeId: before.id,
+      documentId: after.documentId,
+      options,
+    });
 
+    const beforeJSON = await DocumentHelper.toJSON(before);
+    const afterJSON = await DocumentHelper.toJSON(after);
+    const changeset = ChangesetHelper.getChangeset(afterJSON, beforeJSON);
+
+    // Without a changeset no diff elements can render, so skip the expensive
+    // HTML generation and clipping entirely.
+    if (!changeset?.changes.length) {
+      return undefined;
+    }
+
+    const html = await DocumentHelper.toHTML(after, {
+      ...options,
+      changes: changeset.changes,
+    });
+    // Loaded lazily to keep jsdom off the startup path — only HTML export needs it.
+    const { JSDOM } = await import("jsdom");
+    const dom = new JSDOM(html);
+    try {
+      return DocumentHelper.clipEmailDiff(dom.window.document);
+    } finally {
+      try {
+        dom.window.close();
+      } catch (_err) {
+        // Best effort, closing the window releases its timers and resources.
+      }
+    }
+  }
+
+  /**
+   * Clips a rendered diff document down to only the changed nodes and their
+   * surrounding context, returning the resulting HTML or undefined when the
+   * document contains no diff elements.
+   *
+   * @param doc The rendered diff document to clip.
+   * @returns The clipped HTML, or undefined when there is nothing to show.
+   */
+  private static clipEmailDiff(doc: JSDOM["window"]["document"]) {
     const containsDiffElement = (node: Element | null) => {
       if (!node) {
         return false;
@@ -817,8 +968,18 @@ export class DocumentHelper {
       const textSame = oldChild.textContent === newChild.textContent;
 
       if (textSame && oldChild.sameMarkup(newChild)) {
-        // Fully unchanged — keep original with its rich content
-        merged.push(oldChild);
+        // Compare against the round-tripped baseline: when the
+        // updated child is identical to a plain round-trip of the original,
+        // the patch did not touch it
+        if (!rtChild || newChild.eq(rtChild)) {
+          merged.push(oldChild);
+        } else if (!oldChild.isTextblock && !oldChild.isLeaf) {
+          // Container child changed deeper down — recurse to preserve rich
+          // content in the parts that did not change.
+          merged.push(DocumentHelper.mergeNodes(oldChild, newChild, rtChild));
+        } else {
+          merged.push(newChild);
+        }
       } else if (textSame) {
         // Attrs changed (e.g. checked state) but content same — merge attrs
         // so that non-markdown-representable values (colwidth, highlight

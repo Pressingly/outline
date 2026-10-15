@@ -1,13 +1,13 @@
-import JSZip from "jszip";
-import omit from "lodash/omit";
+import type { ZipFile } from "yazl";
+import { omit } from "es-toolkit/compat";
 import type { NavigationNode } from "@shared/types";
 import env from "@server/env";
-import Logger from "@server/logging/Logger";
 import type { Collection, FileOperation } from "@server/models";
 import { Attachment, Document } from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import { presentAttachment, presentCollection } from "@server/presenters";
+import { sequelizeReadOnly } from "@server/storage/database";
 import type { CollectionJSONExport, JSONExportMetadata } from "@server/types";
 import ZipHelper from "@server/utils/ZipHelper";
 import { serializeFilename } from "@server/utils/fs";
@@ -19,32 +19,34 @@ export default class ExportJSONTask extends ExportTask {
     collections: Collection[],
     fileOperation: FileOperation
   ) {
-    const zip = new JSZip();
     const usedFilenames = new Set<string>();
 
-    // serial to avoid overloading, slow and steady wins the race
-    for (const collection of collections) {
-      let filename = serializeFilename(collection.name);
-      let i = 0;
-      while (usedFilenames.has(filename)) {
-        filename = `${serializeFilename(collection.name)} (${++i})`;
+    return ZipHelper.toTmpFile(async (zip) => {
+      // serial to avoid overloading, slow and steady wins the race
+      for (const collection of collections) {
+        let filename = serializeFilename(collection.name);
+        let i = 0;
+        while (usedFilenames.has(filename)) {
+          filename = `${serializeFilename(collection.name)} (${++i})`;
+        }
+        usedFilenames.add(filename);
+
+        await this.addCollectionToArchive(
+          zip,
+          collection,
+          fileOperation.options?.includeAttachments ?? true,
+          filename
+        );
       }
-      usedFilenames.add(filename);
 
-      await this.addCollectionToArchive(
-        zip,
-        collection,
-        fileOperation.options?.includeAttachments ?? true,
-        filename
-      );
-    }
-
-    await this.addMetadataToArchive(zip, fileOperation);
-
-    return ZipHelper.toTmpFile(zip);
+      await this.addMetadataToArchive(zip, fileOperation);
+    });
   }
 
-  private async addMetadataToArchive(zip: JSZip, fileOperation: FileOperation) {
+  private async addMetadataToArchive(
+    zip: ZipFile,
+    fileOperation: FileOperation
+  ) {
     const user = await fileOperation.$get("user");
 
     const metadata: JSONExportMetadata = {
@@ -55,16 +57,18 @@ export default class ExportJSONTask extends ExportTask {
       createdByEmail: user?.email ?? null,
     };
 
-    zip.file(
-      `metadata.json`,
-      env.isDevelopment
-        ? JSON.stringify(metadata, null, 2)
-        : JSON.stringify(metadata)
+    zip.addBuffer(
+      Buffer.from(
+        env.isDevelopment
+          ? JSON.stringify(metadata, null, 2)
+          : JSON.stringify(metadata)
+      ),
+      `metadata.json`
     );
   }
 
   private async addCollectionToArchive(
-    zip: JSZip,
+    zip: ZipFile,
     collection: Collection,
     includeAttachments: boolean,
     filename: string
@@ -81,57 +85,56 @@ export default class ExportJSONTask extends ExportTask {
       attachments: {},
     };
 
-    async function addAttachments(attachments: Attachment[]) {
-      await Promise.all(
-        attachments.map(async (attachment) => {
-          zip.file(
-            attachment.key,
-            new Promise<Buffer>((resolve) => {
-              attachment.buffer.then(resolve).catch((err) => {
-                Logger.warn(`Failed to read attachment from storage`, {
-                  attachmentId: attachment.id,
-                  teamId: attachment.teamId,
-                  error: err.message,
-                });
-                resolve(Buffer.from(""));
-              });
-            }),
-            {
-              date: attachment.updatedAt,
-              createFolders: true,
-            }
-          );
+    const addAttachments = (attachments: Attachment[]) => {
+      for (const attachment of attachments) {
+        this.addAttachmentToArchive(zip, attachment, attachment.key);
 
-          output.attachments[attachment.id] = {
-            ...omit(presentAttachment(attachment), "url"),
-            key: attachment.key,
-          };
-        })
-      );
-    }
+        output.attachments[attachment.id] = {
+          ...omit(presentAttachment(attachment), "url"),
+          key: attachment.key,
+        };
+      }
+    };
 
-    async function addDocumentTree(nodes: NavigationNode[]) {
+    const addDocumentTree = async (nodes: NavigationNode[]) => {
       for (const node of nodes) {
-        const document = await Document.findByPk(node.id, {
-          includeState: true,
-        });
+        const result = await sequelizeReadOnly.transaction(
+          async (transaction) => {
+            const document = await Document.findByPk(node.id, {
+              includeState: true,
+              transaction,
+            });
 
-        if (!document) {
+            if (!document) {
+              return;
+            }
+
+            const attachmentIds = includeAttachments
+              ? ProsemirrorHelper.parseAttachmentIds(
+                  DocumentHelper.toProsemirror(document)
+                )
+              : [];
+            const attachments = attachmentIds.length
+              ? await Attachment.findAll({
+                  where: {
+                    teamId: document.teamId,
+                    id: attachmentIds,
+                  },
+                  transaction,
+                })
+              : [];
+
+            return { attachments, document };
+          }
+        );
+
+        if (!result) {
           continue;
         }
 
-        const documentAttachments = includeAttachments
-          ? await Attachment.findAll({
-              where: {
-                teamId: document.teamId,
-                id: ProsemirrorHelper.parseAttachmentIds(
-                  DocumentHelper.toProsemirror(document)
-                ),
-              },
-            })
-          : [];
+        const { attachments, document } = result;
 
-        await addAttachments(documentAttachments);
+        addAttachments(attachments);
 
         output.documents[document.id] = {
           id: document.id,
@@ -156,30 +159,38 @@ export default class ExportJSONTask extends ExportTask {
           await addDocumentTree(node.children);
         }
       }
-    }
+    };
 
-    const collectionAttachments = includeAttachments
-      ? await Attachment.findAll({
-          where: {
-            teamId: collection.teamId,
-            id: ProsemirrorHelper.parseAttachmentIds(
-              DocumentHelper.toProsemirror(collection)
-            ),
-          },
-        })
+    const collectionAttachmentIds = includeAttachments
+      ? ProsemirrorHelper.parseAttachmentIds(
+          DocumentHelper.toProsemirror(collection)
+        )
+      : [];
+    const collectionAttachments = collectionAttachmentIds.length
+      ? await sequelizeReadOnly.transaction((transaction) =>
+          Attachment.findAll({
+            where: {
+              teamId: collection.teamId,
+              id: collectionAttachmentIds,
+            },
+            transaction,
+          })
+        )
       : [];
 
-    await addAttachments(collectionAttachments);
+    addAttachments(collectionAttachments);
 
     if (collection.documentStructure) {
       await addDocumentTree(collection.documentStructure);
     }
 
-    zip.file(
-      `${filename}.json`,
-      env.isDevelopment
-        ? JSON.stringify(output, null, 2)
-        : JSON.stringify(output)
+    zip.addBuffer(
+      Buffer.from(
+        env.isDevelopment
+          ? JSON.stringify(output, null, 2)
+          : JSON.stringify(output)
+      ),
+      `${filename}.json`
     );
   }
 

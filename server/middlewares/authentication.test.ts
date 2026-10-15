@@ -1,5 +1,6 @@
 import type { DefaultState } from "koa";
 import { AUTH_TYPE_SSO } from "@shared/constants";
+import { errToString } from "@shared/utils/error";
 import { randomString } from "@shared/random";
 import { Scope } from "@shared/types";
 import env from "@server/env";
@@ -38,7 +39,7 @@ function createCtx(overrides: CtxOverrides = {}) {
     ...(overrides.request?.headers || {}),
   };
 
-  const get = jest.fn((key: string) => headers[key.toLowerCase()]);
+  const get = vi.fn((key: string) => headers[key.toLowerCase()]);
 
   return {
     state: {},
@@ -49,7 +50,7 @@ function createCtx(overrides: CtxOverrides = {}) {
     get,
 
     cookies: {
-      get: jest.fn(() => undefined), // 👈 THIS was missing
+      get: vi.fn(() => undefined), // 👈 THIS was missing
     },
 
     request: {
@@ -74,12 +75,12 @@ describe("Authentication middleware", () => {
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn(() => `Bearer ${user.getJwtToken()}`),
+            get: vi.fn(() => `Bearer ${user.getSessionToken()}`),
           },
           state,
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
       expect(state.auth.user.id).toEqual(user.id);
     });
@@ -94,15 +95,15 @@ describe("Authentication middleware", () => {
           {
             // @ts-expect-error mock request
             request: {
-              get: jest.fn(() => `Bearer ${user.getJwtToken()}error`),
+              get: vi.fn(() => `Bearer ${user.getSessionToken()}error`),
             },
             state,
             cache: {},
           },
-          jest.fn()
+          vi.fn()
         );
       } catch (e) {
-        expect(e.message).toBe("Invalid token");
+        expect(errToString(e)).toBe("Invalid token");
       }
     });
 
@@ -118,15 +119,15 @@ describe("Authentication middleware", () => {
           {
             // @ts-expect-error mock request
             request: {
-              get: jest.fn(() => `Bearer ${user.getJwtToken()}`),
+              get: vi.fn(() => `Bearer ${user.getSessionToken()}`),
             },
             state,
             cache: {},
           },
-          jest.fn()
+          vi.fn()
         );
       } catch (e) {
-        expect(e.message).toBe("Invalid authentication type");
+        expect(errToString(e)).toBe("Invalid authentication type");
       }
     });
   });
@@ -141,12 +142,12 @@ describe("Authentication middleware", () => {
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn(() => `Bearer ${key.value}`),
+            get: vi.fn(() => `Bearer ${key.value}`),
           },
           state,
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
       expect(state.auth.user.id).toEqual(user.id);
     });
@@ -165,12 +166,12 @@ describe("Authentication middleware", () => {
           // @ts-expect-error mock request
           request: {
             url: "/auth.info",
-            get: jest.fn(() => `Bearer ${key.value}`),
+            get: vi.fn(() => `Bearer ${key.value}`),
           },
           state,
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
       expect(state.auth.user.id).toEqual(user.id);
     });
@@ -191,18 +192,20 @@ describe("Authentication middleware", () => {
             // @ts-expect-error mock request
             request: {
               url: "/documents.create",
-              get: jest.fn(() => `Bearer ${key.value}`),
+              get: vi.fn(() => `Bearer ${key.value}`),
             },
             state,
             cache: {},
           },
-          jest.fn()
+          vi.fn()
         );
         throw new Error("Expected error to be thrown");
       } catch (e) {
-        expect(e.status).toBe(403);
-        expect(e.id).toBe("authorization_error");
-        expect(e.message).toContain("does not have access to this resource");
+        expect(e).toHaveProperty("status", 403);
+        expect(e).toHaveProperty("id", "authorization_error");
+        expect(errToString(e)).toContain(
+          "does not have access to this resource"
+        );
       }
     });
 
@@ -215,15 +218,15 @@ describe("Authentication middleware", () => {
           {
             // @ts-expect-error mock request
             request: {
-              get: jest.fn(() => `Bearer ${randomString(38)}`),
+              get: vi.fn(() => `Bearer ${randomString(38)}`),
             },
             state,
             cache: {},
           },
-          jest.fn()
+          vi.fn()
         );
       } catch (e) {
-        expect(e.message).toBe("Invalid API key");
+        expect(errToString(e)).toBe("Invalid API key");
       }
     });
   });
@@ -244,12 +247,12 @@ describe("Authentication middleware", () => {
           // @ts-expect-error mock request
           request: {
             url: "/users.info",
-            get: jest.fn(() => `Bearer ${authentication.accessToken}`),
+            get: vi.fn(() => `Bearer ${authentication.accessToken}`),
           },
           state,
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
       expect(state.auth.user.id).toEqual(user.id);
     });
@@ -270,15 +273,17 @@ describe("Authentication middleware", () => {
             // @ts-expect-error mock request
             request: {
               url: "/documents.create",
-              get: jest.fn(() => `Bearer ${authentication.accessToken}`),
+              get: vi.fn(() => `Bearer ${authentication.accessToken}`),
             },
             state,
             cache: {},
           },
-          jest.fn()
+          vi.fn()
         );
       } catch (e) {
-        expect(e.message).toContain("does not have access to this resource");
+        expect(errToString(e)).toContain(
+          "does not have access to this resource"
+        );
       }
     });
 
@@ -305,7 +310,7 @@ describe("Authentication middleware", () => {
 
       try {
         // @ts-expect-error mock context
-        await authMiddleware(ctx, jest.fn());
+        await authMiddleware(ctx, vi.fn());
         throw new Error("Expected middleware to throw");
       } catch (e) {
         error = e as MiddlewareError;
@@ -328,21 +333,21 @@ describe("Authentication middleware", () => {
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn(() => "error"),
+            get: vi.fn(() => "error"),
           },
           state,
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
     } catch (e) {
-      expect(e.message).toBe(
+      expect(errToString(e)).toBe(
         'Bad Authorization header format. Format is "Authorization: Bearer <token>"'
       );
     }
   });
 
-  it("should allow passing auth token as a GET param", async () => {
+  it("should allow passing session token in a cookie", async () => {
     const state = {} as DefaultState;
     const user = await buildUser();
     const authMiddleware = auth();
@@ -350,20 +355,71 @@ describe("Authentication middleware", () => {
       {
         request: {
           // @ts-expect-error mock request
-          get: jest.fn(() => null),
-          query: {
-            token: user.getJwtToken(),
-          },
+          get: vi.fn(() => null),
+        },
+        // @ts-expect-error mock cookies
+        cookies: {
+          get: vi.fn(() => user.getSessionToken()),
         },
         state,
         cache: {},
       },
-      jest.fn()
+      vi.fn()
     );
     expect(state.auth.user.id).toEqual(user.id);
   });
 
-  it("should allow passing auth token in body params", async () => {
+  it("should return error with session token as a GET param", async () => {
+    const state = {} as DefaultState;
+    const user = await buildUser();
+    const authMiddleware = auth();
+
+    await expect(
+      authMiddleware(
+        {
+          request: {
+            // @ts-expect-error mock request
+            get: vi.fn(() => null),
+            query: {
+              token: user.getSessionToken(),
+            },
+          },
+          state,
+          cache: {},
+        },
+        vi.fn()
+      )
+    ).rejects.toThrow(
+      "Session token must be passed in the cookie or Authorization header"
+    );
+  });
+
+  it("should return error with session token in body params", async () => {
+    const state = {} as DefaultState;
+    const user = await buildUser();
+    const authMiddleware = auth();
+
+    await expect(
+      authMiddleware(
+        {
+          request: {
+            // @ts-expect-error mock request
+            get: vi.fn(() => null),
+            body: {
+              token: user.getSessionToken(),
+            },
+          },
+          state,
+          cache: {},
+        },
+        vi.fn()
+      )
+    ).rejects.toThrow(
+      "Session token must be passed in the cookie or Authorization header"
+    );
+  });
+
+  it("should allow passing transfer token as a GET param", async () => {
     const state = {} as DefaultState;
     const user = await buildUser();
     const authMiddleware = auth();
@@ -371,15 +427,15 @@ describe("Authentication middleware", () => {
       {
         request: {
           // @ts-expect-error mock request
-          get: jest.fn(() => null),
-          body: {
-            token: user.getJwtToken(),
+          get: vi.fn(() => null),
+          query: {
+            token: user.getTransferToken(),
           },
         },
         state,
         cache: {},
       },
-      jest.fn()
+      vi.fn()
     );
     expect(state.auth.user.id).toEqual(user.id);
   });
@@ -399,21 +455,21 @@ describe("Authentication middleware", () => {
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn(() => `Bearer ${user.getJwtToken()}`),
+            get: vi.fn(() => `Bearer ${user.getSessionToken()}`),
           },
           state,
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
     } catch (err) {
       error = err;
     }
 
-    expect(error.message).toEqual(
+    expect(errToString(error)).toEqual(
       "Your access has been suspended by a workspace admin"
     );
-    expect(error.errorData.adminEmail).toEqual(admin.email);
+    expect(error).toHaveProperty("errorData.adminEmail", admin.email);
   });
 
   describe("with ForwardAuth headers", () => {
@@ -435,7 +491,7 @@ describe("Authentication middleware", () => {
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn((header: string) => {
+            get: vi.fn((header: string) => {
               if (header === "x-auth-request-email") {
                 return user.email!;
               }
@@ -443,12 +499,12 @@ describe("Authentication middleware", () => {
             }),
           },
           // @ts-expect-error mock cookies
-          cookies: { get: jest.fn(() => undefined), set: jest.fn() },
+          cookies: { get: vi.fn(() => undefined), set: vi.fn() },
           state,
           ip: "127.0.0.1",
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
 
       expect(state.auth.user.id).toEqual(user.id);
@@ -461,14 +517,14 @@ describe("Authentication middleware", () => {
       const user = await buildUser({ teamId: team.id });
       const state = {} as DefaultState;
       const authMiddleware = auth();
-      const cookiesSet = jest.fn();
+      const cookiesSet = vi.fn();
       const before = Date.now();
 
       await authMiddleware(
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn((header: string) => {
+            get: vi.fn((header: string) => {
               if (header === "x-auth-request-email") {
                 return user.email!;
               }
@@ -476,12 +532,12 @@ describe("Authentication middleware", () => {
             }),
           },
           // @ts-expect-error mock cookies
-          cookies: { get: jest.fn(() => undefined), set: cookiesSet },
+          cookies: { get: vi.fn(() => undefined), set: cookiesSet },
           state,
           ip: "127.0.0.1",
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
 
       const accessTokenCall = cookiesSet.mock.calls.find(
@@ -507,7 +563,7 @@ describe("Authentication middleware", () => {
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn((header: string) => {
+            get: vi.fn((header: string) => {
               if (header === "x-auth-request-email") {
                 return newEmail;
               }
@@ -515,12 +571,12 @@ describe("Authentication middleware", () => {
             }),
           },
           // @ts-expect-error mock cookies
-          cookies: { get: jest.fn(() => undefined), set: jest.fn() },
+          cookies: { get: vi.fn(() => undefined), set: vi.fn() },
           state,
           ip: "127.0.0.1",
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
 
       const provisioned = await User.findOne({
@@ -546,7 +602,7 @@ describe("Authentication middleware", () => {
           {
             // @ts-expect-error mock request
             request: {
-              get: jest.fn((header: string) => {
+              get: vi.fn((header: string) => {
                 if (header === "x-auth-request-email") {
                   return localPart;
                 }
@@ -554,12 +610,12 @@ describe("Authentication middleware", () => {
               }),
             },
             // @ts-expect-error mock cookies
-            cookies: { get: jest.fn(() => undefined), set: jest.fn() },
+            cookies: { get: vi.fn(() => undefined), set: vi.fn() },
             state,
             ip: "127.0.0.1",
             cache: {},
           },
-          jest.fn()
+          vi.fn()
         );
 
         expect(state.auth.user.email).toEqual(`${localPart.toLowerCase()}@askii.ai`);
@@ -581,7 +637,7 @@ describe("Authentication middleware", () => {
           {
             // @ts-expect-error mock request
             request: {
-              get: jest.fn((header: string) => {
+              get: vi.fn((header: string) => {
                 if (header === "x-auth-request-email") {
                   return "@example.com";
                 }
@@ -589,12 +645,12 @@ describe("Authentication middleware", () => {
               }),
             },
             // @ts-expect-error mock cookies
-            cookies: { get: jest.fn(() => undefined), set: jest.fn() },
+            cookies: { get: vi.fn(() => undefined), set: vi.fn() },
             state,
             ip: "127.0.0.1",
             cache: {},
           },
-          jest.fn()
+          vi.fn()
         )
       ).rejects.toThrow("Invalid forwarded email: missing local part");
     });
@@ -619,7 +675,7 @@ describe("Authentication middleware", () => {
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn((header: string) => {
+            get: vi.fn((header: string) => {
               if (header === "x-auth-request-email") {
                 return wildcardEmail;
               }
@@ -627,12 +683,12 @@ describe("Authentication middleware", () => {
             }),
           },
           // @ts-expect-error mock cookies
-          cookies: { get: jest.fn(() => undefined), set: jest.fn() },
+          cookies: { get: vi.fn(() => undefined), set: vi.fn() },
           state,
           ip: "127.0.0.1",
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
 
       expect(state.auth.user.id).not.toEqual(existingUser.id);
@@ -653,8 +709,8 @@ describe("Authentication middleware", () => {
       // the lock entirely, this test fails.
       await buildTeam();
       const newEmail = `racetest-${randomString(6)}@example.com`;
-      const querySpy = jest.spyOn(sequelize, "query");
-      const createSpy = jest.spyOn(User, "create");
+      const querySpy = vi.spyOn(sequelize, "query");
+      const createSpy = vi.spyOn(User, "create");
 
       try {
         const state = {} as DefaultState;
@@ -664,7 +720,7 @@ describe("Authentication middleware", () => {
           {
             // @ts-expect-error mock request
             request: {
-              get: jest.fn((header: string) => {
+              get: vi.fn((header: string) => {
                 if (header === "x-auth-request-email") {
                   return newEmail;
                 }
@@ -672,12 +728,12 @@ describe("Authentication middleware", () => {
               }),
             },
             // @ts-expect-error mock cookies
-            cookies: { get: jest.fn(() => undefined), set: jest.fn() },
+            cookies: { get: vi.fn(() => undefined), set: vi.fn() },
             state,
             ip: "127.0.0.1",
             cache: {},
           },
-          jest.fn()
+          vi.fn()
         );
 
         // 1. The advisory lock was acquired at least once with the
@@ -721,14 +777,14 @@ describe("Authentication middleware", () => {
 
       let err: MiddlewareError | undefined;
 
-      const aliceJwt = alice.getJwtToken();
+      const aliceJwt = alice.getSessionToken();
 
       try {
         await authMiddleware(
           {
             // @ts-expect-error mock request
             request: {
-              get: jest.fn((header: string) => {
+              get: vi.fn((header: string) => {
                 if (header === "x-auth-request-email") {
                   return bob.email!;
                 }
@@ -737,7 +793,7 @@ describe("Authentication middleware", () => {
             },
             // @ts-expect-error mock cookies
             cookies: {
-              get: jest.fn((key: string) => {
+              get: vi.fn((key: string) => {
                 if (key === "accessToken") {
                   return aliceJwt;
                 }
@@ -748,7 +804,7 @@ describe("Authentication middleware", () => {
             ip: "127.0.0.1",
             cache: {},
           },
-          jest.fn()
+          vi.fn()
         );
       } catch (e) {
         err = e as MiddlewareError;
@@ -772,13 +828,13 @@ describe("Authentication middleware", () => {
       const user = await buildUser({ teamId: team.id });
       const state = {} as DefaultState;
       const authMiddleware = auth();
-      const userJwt = user.getJwtToken();
+      const userJwt = user.getSessionToken();
 
       await authMiddleware(
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn((header: string) => {
+            get: vi.fn((header: string) => {
               if (header === "x-auth-request-email") {
                 return user.email!;
               }
@@ -787,19 +843,19 @@ describe("Authentication middleware", () => {
           },
           // @ts-expect-error mock cookies
           cookies: {
-            get: jest.fn((key: string) => {
+            get: vi.fn((key: string) => {
               if (key === "accessToken") {
                 return userJwt;
               }
               return undefined;
             }),
-            set: jest.fn(),
+            set: vi.fn(),
           },
           state,
           ip: "127.0.0.1",
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
 
       expect(state.auth.user.id).toEqual(user.id);
@@ -816,7 +872,7 @@ describe("Authentication middleware", () => {
       const user = await buildUser({ teamId: team.id });
       const state = {} as DefaultState;
       const authMiddleware = auth();
-      const userJwt = user.getJwtToken();
+      const userJwt = user.getSessionToken();
       // user.email is canonical lowercase; header is uppercase + whitespace-padded.
       const variantHeader = `  ${user.email!.toUpperCase()}  `;
 
@@ -824,7 +880,7 @@ describe("Authentication middleware", () => {
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn((header: string) => {
+            get: vi.fn((header: string) => {
               if (header === "x-auth-request-email") {
                 return variantHeader;
               }
@@ -833,19 +889,19 @@ describe("Authentication middleware", () => {
           },
           // @ts-expect-error mock cookies
           cookies: {
-            get: jest.fn((key: string) => {
+            get: vi.fn((key: string) => {
               if (key === "accessToken") {
                 return userJwt;
               }
               return undefined;
             }),
-            set: jest.fn(),
+            set: vi.fn(),
           },
           state,
           ip: "127.0.0.1",
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
 
       // No 401 thrown, no cookie cleared — request is authenticated as
@@ -863,7 +919,7 @@ describe("Authentication middleware", () => {
           {
             // @ts-expect-error mock request
             request: {
-              get: jest.fn((header: string) => {
+              get: vi.fn((header: string) => {
                 if (header === "x-auth-request-email") {
                   return "attacker@example.com";
                 }
@@ -872,15 +928,15 @@ describe("Authentication middleware", () => {
               query: {},
             },
             // @ts-expect-error mock cookies
-            cookies: { get: jest.fn(() => undefined) },
+            cookies: { get: vi.fn(() => undefined) },
             state,
             cache: {},
           },
-          jest.fn()
+          vi.fn()
         );
         expect(true).toBe(false); // should not reach here
       } catch (e) {
-        expect(e.message).toEqual("Authentication required");
+        expect(errToString(e)).toEqual("Authentication required");
       }
     });
   });
@@ -898,18 +954,72 @@ describe("Authentication middleware", () => {
         {
           // @ts-expect-error mock request
           request: {
-            get: jest.fn(() => `Bearer ${user.getJwtToken()}`),
+            get: vi.fn(() => `Bearer ${user.getSessionToken()}`),
           },
           state,
           cache: {},
         },
-        jest.fn()
+        vi.fn()
       );
     } catch (err) {
       error = err;
     }
 
-    expect(error.message).toEqual("Invalid token");
+    expect(errToString(error)).toEqual("Invalid token");
+  });
+  describe("with skip", () => {
+    it("should ignore credentials when skip returns true", async () => {
+      const state = {} as DefaultState;
+      const user = await buildUser();
+      const apiKey = await buildApiKey({
+        userId: user.id,
+        scope: ["/api/documents.info"],
+      });
+      const next = vi.fn();
+      const authMiddleware = auth({
+        optional: true,
+        skip: (ctx) => !!ctx.query.sig,
+      });
+      await authMiddleware(
+        {
+          // @ts-expect-error mock request
+          request: {
+            get: vi.fn(() => `Bearer ${apiKey.value}`),
+          },
+          query: { sig: "signature" },
+          originalUrl: "/api/files.get?sig=signature",
+          state,
+          cache: {},
+        },
+        next
+      );
+      expect(next).toHaveBeenCalled();
+      expect(state.auth).toEqual({});
+    });
+
+    it("should authenticate when skip returns false", async () => {
+      const state = {} as DefaultState;
+      const user = await buildUser();
+      const next = vi.fn();
+      const authMiddleware = auth({
+        optional: true,
+        skip: (ctx) => !!ctx.query.sig,
+      });
+      await authMiddleware(
+        {
+          // @ts-expect-error mock request
+          request: {
+            get: vi.fn(() => `Bearer ${user.getSessionToken()}`),
+          },
+          query: {},
+          state,
+          cache: {},
+        },
+        next
+      );
+      expect(next).toHaveBeenCalled();
+      expect(state.auth.user.id).toEqual(user.id);
+    });
   });
 });
 
@@ -921,10 +1031,10 @@ describe("Authentication middleware - cookie cleanup regression", () => {
       state,
       cache: {},
       request: {
-        get: jest.fn(() => undefined),
+        get: vi.fn(() => undefined),
       },
       cookies: {
-        get: jest.fn((key: string) => {
+        get: vi.fn((key: string) => {
           if (key === "accessToken") {
             return "cookie-token";
           }
@@ -963,7 +1073,7 @@ describe("Authentication middleware - cookie cleanup regression", () => {
       state,
       cache: {},
       request: {
-        get: jest.fn((header: string) => {
+        get: vi.fn((header: string) => {
           if (header === "authorization") {
             return "Bearer fake.jwt.token";
           }
@@ -971,7 +1081,7 @@ describe("Authentication middleware - cookie cleanup regression", () => {
         }),
       },
       cookies: {
-        get: jest.fn(() => "cookie-token"),
+        get: vi.fn(() => "cookie-token"),
       },
     };
 

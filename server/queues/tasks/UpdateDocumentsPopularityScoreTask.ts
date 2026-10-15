@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import { setTimeout } from "node:timers/promises";
-import { subWeeks } from "date-fns";
+import { subDays } from "date-fns";
 import { QueryTypes } from "sequelize";
-import { Minute } from "@shared/utils/time";
+import { toError } from "@shared/utils/error";
+import { Hour } from "@shared/utils/time";
 import env from "@server/env";
 import Logger from "@server/logging/Logger";
 import { TaskPriority } from "./base/BaseTask";
@@ -23,6 +24,7 @@ const TIME_OFFSET_HOURS = 2;
 const ACTIVITY_WEIGHTS = {
   revision: 1.0,
   comment: 1.2,
+  reaction: 0.8,
   view: 0.5,
 };
 
@@ -41,6 +43,13 @@ const INTER_BATCH_DELAY_MS = 500;
  */
 const WORKING_TABLE_PREFIX = "popularity_score_working";
 
+/**
+ * Number of hours over which to spread a single run. Partitions are scheduled
+ * one minute apart across this window, so each handles a small slice of
+ * documents.
+ */
+const SPREAD_HOURS = 1;
+
 interface DocumentScore {
   documentId: string;
   score: number;
@@ -52,19 +61,30 @@ export default class UpdateDocumentsPopularityScoreTask extends CronTask {
    */
   private workingTable: string = "";
 
-  public async perform({ partition }: Props) {
-    // Only run every X hours, skip other hours
-    const currentHour = new Date().getHours();
-    if (currentHour % env.POPULARITY_UPDATE_INTERVAL_HOURS !== 0) {
+  public async perform({ partition, scheduledAt }: Props) {
+    // Only run every X hours, skip other hours. Partitions of a single run are
+    // spread over several hours, so this is based on when the run was
+    // scheduled rather than when this partition happens to execute.
+    const scheduledHour = new Date(scheduledAt ?? Date.now()).getHours();
+    if (scheduledHour % env.POPULARITY_UPDATE_INTERVAL_HOURS !== 0) {
       Logger.debug(
         "task",
-        `Skipping popularity score update, will run at next ${env.POPULARITY_UPDATE_INTERVAL_HOURS}-hour interval (current hour: ${currentHour})`
+        `Skipping popularity score update, will run at next ${env.POPULARITY_UPDATE_INTERVAL_HOURS}-hour interval (scheduled hour: ${scheduledHour})`
       );
       return;
     }
 
     const now = new Date();
-    const threshold = subWeeks(now, env.POPULARITY_ACTIVITY_THRESHOLD_WEEKS);
+    // Use UTC day boundaries to match how document_insights.date is written by
+    // RollupDocumentInsightsTask (which derives dates via toISOString). Local
+    // timezone could shift the window by a day in some deployments.
+    const today = now.toISOString().slice(0, 10);
+    const thresholdDate = subDays(
+      now,
+      env.POPULARITY_ACTIVITY_THRESHOLD_WEEKS * 7
+    )
+      .toISOString()
+      .slice(0, 10);
 
     // Generate unique table name for this run to prevent conflicts
     const dateStr = now.toISOString().slice(0, 19).replace(/[-:T]/g, "");
@@ -76,9 +96,11 @@ export default class UpdateDocumentsPopularityScoreTask extends CronTask {
       await this.cleanupStaleWorkingTables();
 
       // Setup: Create working table and populate with active document IDs
-      await this.setupWorkingTable(threshold, partition);
-
-      const activeCount = await this.getWorkingTableCount();
+      const activeCount = await this.setupWorkingTable(
+        thresholdDate,
+        today,
+        partition
+      );
 
       if (activeCount === 0) {
         Logger.info("task", "No documents with recent activity found");
@@ -96,29 +118,30 @@ export default class UpdateDocumentsPopularityScoreTask extends CronTask {
       let batchNumber = 0;
 
       while (true) {
-        const remaining = await this.getWorkingTableCount();
-        if (remaining === 0) {
-          break;
-        }
-
         batchNumber++;
 
         try {
-          const updated = await this.processBatch(threshold, now);
+          const updated = await this.processBatch(thresholdDate, today);
           totalUpdated += updated;
 
           Logger.debug(
             "task",
-            `Batch ${batchNumber}: updated ${updated} documents, ${remaining - updated} remaining`
+            `Batch ${batchNumber}: updated ${updated} documents`
           );
 
-          // Add delay between batches to reduce sustained pressure on the database
-          if (remaining - updated > 0) {
-            await setTimeout(INTER_BATCH_DELAY_MS);
+          // A short batch means the working table is drained.
+          if (updated < BATCH_SIZE) {
+            break;
           }
+
+          // Add delay between batches to reduce sustained pressure on the database
+          await setTimeout(INTER_BATCH_DELAY_MS);
         } catch (error) {
           totalErrors++;
-          Logger.error(`Batch ${batchNumber} failed after retries`, error);
+          Logger.error(
+            `Batch ${batchNumber} failed after retries`,
+            toError(error)
+          );
 
           // Remove failed batch from working table to prevent infinite loop
           await this.skipCurrentBatch();
@@ -130,7 +153,10 @@ export default class UpdateDocumentsPopularityScoreTask extends CronTask {
         `Completed updating popularity scores: ${totalUpdated} documents updated, ${totalErrors} batch errors`
       );
     } catch (error) {
-      Logger.error("Failed to update document popularity scores", error);
+      Logger.error(
+        "Failed to update document popularity scores",
+        toError(error)
+      );
       throw error;
     } finally {
       // Always clean up the working table
@@ -142,11 +168,14 @@ export default class UpdateDocumentsPopularityScoreTask extends CronTask {
    * Creates an unlogged working table and populates it with document IDs
    * that have recent activity. Unlogged tables are faster because they
    * skip WAL logging, and data loss on crash is acceptable here.
+   *
+   * @returns the number of documents added to the working table.
    */
   private async setupWorkingTable(
-    threshold: Date,
+    thresholdDate: string,
+    today: string,
     partition: PartitionInfo
-  ): Promise<void> {
+  ): Promise<number> {
     // Drop any existing table first to avoid type conflicts from previous crashed runs
     await sequelize.query(`DROP TABLE IF EXISTS ${this.workingTable} CASCADE`);
 
@@ -158,76 +187,103 @@ export default class UpdateDocumentsPopularityScoreTask extends CronTask {
       )
     `);
 
-    const [startUuid, endUuid] = this.getPartitionBounds(partition);
+    const [startId, endId] = this.getPartitionBounds(partition);
 
-    // Populate with documents that have recent activity and are valid
-    // (published, not deleted). Process in chunks to avoid long-running queries.
-    // Read from replica to avoid excessive locking on primary.
-    let lastId = startUuid;
+    // Populate with documents that have recent activity OR a current non-zero
+    // score (so dormant docs decay back to zero once activity falls out of the
+    // window). Must be valid: published and not deleted. Process in chunks to
+    // avoid long-running queries. Read from replica to avoid excessive locking.
+    // The nil UUID is never generated, so no real document can be skipped by
+    // starting the cursor there.
+    let lastId = "00000000-0000-0000-0000-000000000000";
     let insertedCount = 0;
     const chunkSize = 1000;
 
     while (true) {
-      // Step 1: Read document IDs from readonly replica to avoid locking
-      const documentIds = await sequelizeReadOnly.query<{ id: string }>(
+      // Step 1: Read candidate document IDs from readonly replica to avoid
+      // locking. The two sources are queried separately so that each can be
+      // served by an index — combining them into a single OR forces a scan of
+      // every document in the partition. Limiting each branch and then the
+      // union still yields the globally lowest `chunkSize` ids, so keyset
+      // pagination remains correct.
+      const candidates = await sequelizeReadOnly.query<{
+        id: string;
+        eligible: boolean;
+      }>(
         `
-        SELECT d.id
-        FROM documents d
-        WHERE d."publishedAt" IS NOT NULL
-          AND d."deletedAt" IS NULL
-          ${lastId ? (insertedCount === 0 ? "AND d.id >= :lastId" : "AND d.id > :lastId") : ""}
-          ${endUuid ? "AND d.id <= :endUuid" : ""}
-          AND (
-            EXISTS (
-              SELECT 1 FROM revisions r
-              WHERE r."documentId" = d.id AND r."createdAt" >= :threshold
-            )
-            OR EXISTS (
-              SELECT 1 FROM comments c
-              WHERE c."documentId" = d.id AND c."createdAt" >= :threshold
-            )
-            OR EXISTS (
-              SELECT 1 FROM views v
-              WHERE v."documentId" = d.id AND v."updatedAt" >= :threshold
-            )
+        WITH candidates AS (
+          (
+            SELECT DISTINCT di."documentId" AS id
+            FROM document_insights di
+            WHERE di.date >= :thresholdDate::date
+              AND di.date <= :today::date
+              AND di."documentId" >= :startId
+              AND di."documentId" <= :endId
+              AND di."documentId" > :lastId
+            ORDER BY id
+            LIMIT :limit
           )
-        ORDER BY d.id
+          UNION
+          (
+            SELECT d.id
+            FROM documents d
+            WHERE d."popularityScore" > 0
+              AND d.id >= :startId
+              AND d.id <= :endId
+              AND d.id > :lastId
+            ORDER BY id
+            LIMIT :limit
+          )
+        )
+        SELECT c.id, (d.id IS NOT NULL) AS eligible
+        FROM candidates c
+        LEFT JOIN documents d
+          ON d.id = c.id
+          AND d."publishedAt" IS NOT NULL
+          AND d."deletedAt" IS NULL
+        ORDER BY c.id
         LIMIT :limit
         `,
         {
           replacements: {
-            threshold,
+            thresholdDate,
+            today,
             lastId,
-            endUuid,
+            startId,
+            endId,
             limit: chunkSize,
           },
           type: QueryTypes.SELECT,
         }
       );
 
-      if (documentIds.length === 0) {
+      if (candidates.length === 0) {
         break;
       }
 
-      // Step 2: Insert the IDs into the working table on primary
-      const ids = documentIds.map((d) => d.id);
-      const result = await sequelize.query<{ documentId: string }>(
-        `
-        INSERT INTO ${this.workingTable} ("documentId")
-        SELECT * FROM unnest(ARRAY[:ids]::uuid[])
-        ON CONFLICT ("documentId") DO NOTHING
-        RETURNING "documentId"
-        `,
-        {
-          replacements: { ids },
-          type: QueryTypes.SELECT,
-        }
-      );
+      // Step 2: Insert the eligible IDs into the working table on primary
+      const ids = candidates.filter((c) => c.eligible).map((c) => c.id);
 
-      insertedCount += result.length;
-      lastId = documentIds[documentIds.length - 1].id;
+      if (ids.length > 0) {
+        const result = await sequelize.query<{ documentId: string }>(
+          `
+          INSERT INTO ${this.workingTable} ("documentId")
+          SELECT * FROM unnest(ARRAY[:ids]::uuid[])
+          ON CONFLICT ("documentId") DO NOTHING
+          RETURNING "documentId"
+          `,
+          {
+            replacements: { ids },
+            type: QueryTypes.SELECT,
+          }
+        );
 
-      if (documentIds.length < chunkSize) {
+        insertedCount += result.length;
+      }
+
+      lastId = candidates[candidates.length - 1].id;
+
+      if (candidates.length < chunkSize) {
         break;
       }
     }
@@ -241,23 +297,17 @@ export default class UpdateDocumentsPopularityScoreTask extends CronTask {
     await sequelize.query(`
       CREATE INDEX ON ${this.workingTable} (processed) WHERE NOT processed
     `);
-  }
 
-  /**
-   * Returns count of unprocessed documents in working table
-   */
-  private async getWorkingTableCount(): Promise<number> {
-    const [result] = await sequelize.query<{ count: string }>(
-      `SELECT COUNT(*) as count FROM ${this.workingTable} WHERE NOT processed`,
-      { type: QueryTypes.SELECT }
-    );
-    return parseInt(result.count, 10);
+    return insertedCount;
   }
 
   /**
    * Processes a batch of documents with retry logic.
    */
-  private async processBatch(threshold: Date, now: Date): Promise<number> {
+  private async processBatch(
+    thresholdDate: string,
+    today: string
+  ): Promise<number> {
     // Step 1: Get batch of document IDs to process
     const batch = await sequelize.query<{ documentId: string }>(
       `
@@ -281,8 +331,8 @@ export default class UpdateDocumentsPopularityScoreTask extends CronTask {
     // Step 2: Calculate scores outside of a transaction
     const scores = await this.calculateScoresForDocuments(
       documentIds,
-      threshold,
-      now
+      thresholdDate,
+      today
     );
 
     // Step 3: Update document scores
@@ -295,13 +345,14 @@ export default class UpdateDocumentsPopularityScoreTask extends CronTask {
   }
 
   /**
-   * Calculates popularity scores for a set of documents.
+   * Calculates popularity scores for a set of documents by summing weighted,
+   * time-decayed daily activity counts from the document_insights rollup.
    * This is a read-only operation that doesn't require locks.
    */
   private async calculateScoresForDocuments(
     documentIds: string[],
-    threshold: Date,
-    now: Date
+    thresholdDate: string,
+    today: string
   ): Promise<DocumentScore[]> {
     const results = await sequelizeReadOnly.query<{
       documentId: string;
@@ -310,60 +361,39 @@ export default class UpdateDocumentsPopularityScoreTask extends CronTask {
       `
       WITH batch_docs AS (
         SELECT * FROM unnest(ARRAY[:documentIds]::uuid[]) AS t(id)
-      ),
-      revision_scores AS (
-        SELECT
-          r."documentId",
-          SUM(:revisionWeight / POWER(
-            GREATEST(EXTRACT(EPOCH FROM (:now::timestamp - r."createdAt")) / 3600 + :timeOffset, 0.1),
-            :gravity
-          )) as score
-        FROM revisions r
-        INNER JOIN batch_docs bd ON r."documentId" = bd.id
-        WHERE r."createdAt" >= :threshold
-        GROUP BY r."documentId"
-      ),
-      comment_scores AS (
-        SELECT
-          c."documentId",
-          SUM(:commentWeight / POWER(
-            GREATEST(EXTRACT(EPOCH FROM (:now::timestamp - c."createdAt")) / 3600 + :timeOffset, 0.1),
-            :gravity
-          )) as score
-        FROM comments c
-        INNER JOIN batch_docs bd ON c."documentId" = bd.id
-        WHERE c."createdAt" >= :threshold
-        GROUP BY c."documentId"
-      ),
-      view_scores AS (
-        SELECT
-          v."documentId",
-          SUM(:viewWeight / POWER(
-            GREATEST(EXTRACT(EPOCH FROM (:now::timestamp - v."updatedAt")) / 3600 + :timeOffset, 0.1),
-            :gravity
-          )) as score
-        FROM views v
-        INNER JOIN batch_docs bd ON v."documentId" = bd.id
-        WHERE v."updatedAt" >= :threshold
-        GROUP BY v."documentId"
       )
       SELECT
-        bd.id as "documentId",
-        COALESCE(rs.score, 0) + COALESCE(cs.score, 0) + COALESCE(vs.score, 0) as total_score
+        bd.id AS "documentId",
+        COALESCE(SUM(
+          (di."revisionCount" * :revisionWeight
+            + di."commentCount" * :commentWeight
+            + di."reactionCount" * :reactionWeight
+            + di."viewCount" * :viewWeight)
+          / POWER(
+            GREATEST(
+              (:today::date - di.date) * 24 + :timeOffset,
+              0.1
+            ),
+            :gravity
+          )
+        ), 0) AS total_score
       FROM batch_docs bd
-      LEFT JOIN revision_scores rs ON bd.id = rs."documentId"
-      LEFT JOIN comment_scores cs ON bd.id = cs."documentId"
-      LEFT JOIN view_scores vs ON bd.id = vs."documentId"
+      LEFT JOIN document_insights di
+        ON di."documentId" = bd.id
+        AND di.date >= :thresholdDate::date
+        AND di.date <= :today::date
+      GROUP BY bd.id
       `,
       {
         replacements: {
           documentIds,
-          threshold,
-          now,
+          thresholdDate,
+          today,
           gravity: env.POPULARITY_GRAVITY,
           timeOffset: TIME_OFFSET_HOURS,
           revisionWeight: ACTIVITY_WEIGHTS.revision,
           commentWeight: ACTIVITY_WEIGHTS.comment,
+          reactionWeight: ACTIVITY_WEIGHTS.reaction,
           viewWeight: ACTIVITY_WEIGHTS.view,
         },
         type: QueryTypes.SELECT,
@@ -447,14 +477,17 @@ export default class UpdateDocumentsPopularityScoreTask extends CronTask {
   }
 
   /**
-   * Drops any stale working tables from previous dates that were left behind
-   * by runs interrupted before cleanup could occur (e.g. worker killed mid-run).
-   * Only removes tables from before the current date to avoid race conditions
-   * with concurrent runs.
+   * Drops any stale working tables that were left behind by runs interrupted
+   * before cleanup could occur (e.g. worker killed mid-run). Only removes
+   * tables created well before the current run's window to avoid race
+   * conditions with concurrent runs.
    */
   private async cleanupStaleWorkingTables(): Promise<void> {
     try {
-      const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      const cutoff = new Date(Date.now() - (SPREAD_HOURS + 2) * Hour.ms)
+        .toISOString()
+        .slice(0, 19)
+        .replace(/[-:T]/g, "");
       const tables = await sequelize.query<{ tablename: string }>(
         `SELECT tablename FROM pg_tables
          WHERE schemaname = 'public'
@@ -470,8 +503,8 @@ export default class UpdateDocumentsPopularityScoreTask extends CronTask {
       const prefixLen = WORKING_TABLE_PREFIX.length + 1; // +1 for underscore
 
       for (const { tablename } of tables) {
-        const dateStr = tablename.slice(prefixLen, prefixLen + 8);
-        if (dateStr < todayStr) {
+        const timestamp = tablename.slice(prefixLen, prefixLen + 14);
+        if (timestamp < cutoff) {
           Logger.info("task", `Dropping stale working table: ${tablename}`);
           await sequelize.query(`DROP TABLE IF EXISTS "${tablename}" CASCADE`);
         }
@@ -497,7 +530,7 @@ export default class UpdateDocumentsPopularityScoreTask extends CronTask {
   public get cron() {
     return {
       interval: TaskInterval.Hour,
-      partitionWindow: 30 * Minute.ms,
+      partitionWindow: SPREAD_HOURS * Hour.ms,
     };
   }
 

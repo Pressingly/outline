@@ -1,5 +1,4 @@
-import cloneDeep from "lodash/cloneDeep";
-import uniq from "lodash/uniq";
+import { cloneDeep, uniq } from "es-toolkit/compat";
 import type {
   Attributes,
   CreationAttributes,
@@ -22,11 +21,9 @@ import type { APIContext } from "@server/types";
 import Comment from "./Comment";
 import User from "./User";
 import IdModel from "./base/IdModel";
-import Fix from "./decorators/Fix";
 import Length from "./validators/Length";
 
 @Table({ tableName: "reactions", modelName: "reaction" })
-@Fix
 class Reaction extends IdModel<
   InferAttributes<Reaction>,
   Partial<InferCreationAttributes<Reaction>>

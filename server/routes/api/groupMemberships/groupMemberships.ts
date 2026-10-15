@@ -1,5 +1,5 @@
 import Router from "koa-router";
-import uniqBy from "lodash/uniqBy";
+import { uniqBy } from "es-toolkit/compat";
 import { Op } from "sequelize";
 import auth from "@server/middlewares/authentication";
 import validate from "@server/middlewares/validate";
@@ -38,6 +38,17 @@ router.post(
         },
       },
       include: [
+        {
+          model: Document.unscoped(),
+          as: "document",
+          required: true,
+          attributes: [],
+          where: {
+            archivedAt: {
+              [Op.eq]: null,
+            },
+          },
+        },
         {
           association: "group",
           required: true,

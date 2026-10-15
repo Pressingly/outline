@@ -81,7 +81,7 @@ function clearAuxiliaryUserState(): void {
  * `server/middlewares/authentication.ts:60-63`. Returns null if the
  * cookie is absent or the JWT is malformed.
  *
- * JWT payload shape (from `User.getJwtToken` in server/models/User.ts):
+ * JWT payload shape (from `User.getSessionToken` in server/models/User.ts):
  *   { id, expiresAt, type, service }
  *
  * No signature verification here — we're using the id as a *change

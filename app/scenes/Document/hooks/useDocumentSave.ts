@@ -1,18 +1,18 @@
-import cloneDeep from "lodash/cloneDeep";
-import debounce from "lodash/debounce";
-import isEqual from "lodash/isEqual";
+import { cloneDeep, debounce, isEqual } from "es-toolkit/compat";
 import { Node } from "prosemirror-model";
 import type { Selection } from "prosemirror-state";
 import { AllSelection, TextSelection } from "prosemirror-state";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useHistory } from "react-router-dom";
 import { toast } from "sonner";
+import { errToString } from "@shared/utils/error";
 import { ProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
 import { TextHelper } from "@shared/utils/TextHelper";
 import type Document from "~/models/Document";
 import Template from "~/models/Template";
 import type Revision from "~/models/Revision";
 import type { Editor as TEditor } from "~/editor";
+import useIsMounted from "~/hooks/useIsMounted";
 import { useLocationSidebarContext } from "~/hooks/useLocationSidebarContext";
 import useStores from "~/hooks/useStores";
 import { documentEditPath } from "~/utils/routeHelpers";
@@ -52,6 +52,36 @@ interface UseDocumentSaveResult {
   onFileUploadStop: () => void;
 }
 
+export function shouldAutoDeleteDraftOnUnmount({
+  isEditorEmpty,
+  title,
+  createdById,
+  currentUserId,
+  isDraft,
+  isActive,
+  hasEmptyTitle,
+  isPersistedOnce,
+}: {
+  isEditorEmpty: boolean;
+  title: string;
+  createdById?: string;
+  currentUserId?: string;
+  isDraft: boolean;
+  isActive: boolean;
+  hasEmptyTitle: boolean;
+  isPersistedOnce: boolean;
+}) {
+  return (
+    isEditorEmpty &&
+    title.trim() === "" &&
+    createdById === currentUserId &&
+    isDraft &&
+    isActive &&
+    hasEmptyTitle &&
+    isPersistedOnce
+  );
+}
+
 /**
  * Hook that encapsulates save, autosave, dirty-tracking, and template
  * insertion logic for the document editor scene.
@@ -67,6 +97,7 @@ export function useDocumentSave({
   const { auth, ui } = useStores();
   const history = useHistory();
   const sidebarContext = useLocationSidebarContext();
+  const isMounted = useIsMounted();
 
   // State
   const [isUploading, setIsUploading] = useState(false);
@@ -79,8 +110,6 @@ export function useDocumentSave({
   // Companion refs for stale closure avoidance
   const isEditorDirtyRef = useRef(isEditorDirty);
   isEditorDirtyRef.current = isEditorDirty;
-  const isEmptyRef = useRef(isEmpty);
-  isEmptyRef.current = isEmpty;
   const titleRef = useRef(title);
   titleRef.current = title;
 
@@ -91,7 +120,6 @@ export function useDocumentSave({
     isEditorDirtyRef.current = dirty;
     const empty = (!doc || ProsemirrorHelper.isEmpty(doc)) && !titleRef.current;
     setIsEmpty(empty);
-    isEmptyRef.current = empty;
   }, [document, editorRef]);
 
   const updateIsDirtyRef = useRef(updateIsDirty);
@@ -140,8 +168,10 @@ export function useDocumentSave({
 
       try {
         const savedDocument = await document.save(undefined, options);
-        setIsEditorDirty(false);
         isEditorDirtyRef.current = false;
+        if (isMounted()) {
+          setIsEditorDirty(false);
+        }
 
         if (options.done) {
           history.push({
@@ -157,13 +187,15 @@ export function useDocumentSave({
           ui.setActiveDocument(savedDocument);
         }
       } catch (err) {
-        toast.error(err.message);
+        toast.error(errToString(err));
       } finally {
-        setIsSaving(false);
-        setIsPublishing(false);
+        if (isMounted()) {
+          setIsSaving(false);
+          setIsPublishing(false);
+        }
       }
     },
-    [document, editorRef, history, sidebarContext, ui]
+    [document, editorRef, history, sidebarContext, ui, isMounted]
   );
 
   const onSaveRef = useRef(onSave);
@@ -315,14 +347,21 @@ export function useDocumentSave({
   useEffect(
     () => () => {
       autosave.cancel();
+      const currentDoc = editorRef.current?.view.state.doc;
+      const isEditorEmpty =
+        !currentDoc || ProsemirrorHelper.isEmpty(currentDoc);
 
       if (
-        isEmptyRef.current &&
-        document.createdBy?.id === auth.user?.id &&
-        document.isDraft &&
-        document.isActive &&
-        document.hasEmptyTitle &&
-        document.isPersistedOnce
+        shouldAutoDeleteDraftOnUnmount({
+          isEditorEmpty,
+          title: titleRef.current,
+          createdById: document.createdBy?.id,
+          currentUserId: auth.user?.id,
+          isDraft: document.isDraft,
+          isActive: document.isActive,
+          hasEmptyTitle: document.hasEmptyTitle,
+          isPersistedOnce: document.isPersistedOnce,
+        })
       ) {
         void document.delete();
       } else if (document.isDirty()) {

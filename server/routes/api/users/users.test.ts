@@ -16,10 +16,10 @@ import { getTestServer } from "@server/test/support";
 const server = getTestServer();
 
 beforeAll(() => {
-  jest.useFakeTimers().setSystemTime(new Date("2018-01-02T00:00:00.000Z"));
+  vi.useFakeTimers().setSystemTime(new Date("2018-01-02T00:00:00.000Z"));
 });
 afterAll(() => {
-  jest.useRealTimers();
+  vi.useRealTimers();
 });
 
 describe("#users.list", () => {
@@ -29,10 +29,64 @@ describe("#users.list", () => {
       email: "john.doe@example.com",
     });
 
-    const res = await server.post("/api/users.list", {
+    const res = await server.post("/api/users.list", user, {
       body: {
         query: "john.doe@e",
-        token: user.getJwtToken(),
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].id).toEqual(user.id);
+  });
+
+  it("should return the inviting user for admins", async () => {
+    const admin = await buildAdmin();
+    const invite = await buildInvite({ teamId: admin.teamId });
+
+    const res = await server.post("/api/users.list", admin, {
+      body: { filter: "all" },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+
+    const invited = body.data.find(
+      (item: { id: string }) => item.id === invite.id
+    );
+    expect(invited.invitedBy.id).toEqual(invite.invitedById);
+  });
+
+  it("should not return the inviting user for non-admins", async () => {
+    const invite = await buildInvite();
+    const user = await buildUser({ teamId: invite.teamId });
+
+    const res = await server.post("/api/users.list", user, {
+      body: { filter: "all" },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+
+    const invited = body.data.find(
+      (item: { id: string }) => item.id === invite.id
+    );
+    expect(invited.invitedBy).toEqual(undefined);
+  });
+
+  it("should treat LIKE wildcards in the query as literal characters", async () => {
+    const user = await buildUser({
+      name: "Underscore",
+      email: "a_b@example.com",
+    });
+    // must not be matched by the "_" in the query
+    await buildUser({
+      name: "Wildcard",
+      email: "axb@example.com",
+      teamId: user.teamId,
+    });
+
+    const res = await server.post("/api/users.list", user, {
+      body: {
+        query: "a_b@example.com",
       },
     });
     const body = await res.json();
@@ -51,10 +105,9 @@ describe("#users.list", () => {
       teamId: user.teamId,
       suspendedAt: new Date(),
     });
-    const res = await server.post("/api/users.list", {
+    const res = await server.post("/api/users.list", user, {
       body: {
         query: "test",
-        token: user.getJwtToken(),
       },
     });
     const body = await res.json();
@@ -71,10 +124,9 @@ describe("#users.list", () => {
       name: "Admin",
       teamId: user.teamId,
     });
-    const res = await server.post("/api/users.list", {
+    const res = await server.post("/api/users.list", user, {
       body: {
         role: UserRole.Admin,
-        token: user.getJwtToken(),
       },
     });
     const body = await res.json();
@@ -90,11 +142,10 @@ describe("#users.list", () => {
       teamId: admin.teamId,
       suspendedAt: new Date(),
     });
-    const res = await server.post("/api/users.list", {
+    const res = await server.post("/api/users.list", admin, {
       body: {
         query: "test",
         filter: "suspended",
-        token: admin.getJwtToken(),
       },
     });
     const body = await res.json();
@@ -109,10 +160,9 @@ describe("#users.list", () => {
       teamId: user.teamId,
       suspendedAt: new Date(),
     });
-    const res = await server.post("/api/users.list", {
+    const res = await server.post("/api/users.list", user, {
       body: {
         query: "test",
-        token: user.getJwtToken(),
       },
     });
     const body = await res.json();
@@ -128,11 +178,10 @@ describe("#users.list", () => {
       name: "Tester",
       teamId: user.teamId,
     });
-    const res = await server.post("/api/users.list", {
+    const res = await server.post("/api/users.list", user, {
       body: {
         query: "test",
         filter: "active",
-        token: user.getJwtToken(),
       },
     });
     const body = await res.json();
@@ -149,11 +198,10 @@ describe("#users.list", () => {
       teamId: user.teamId,
       lastActiveAt: null,
     });
-    const res = await server.post("/api/users.list", {
+    const res = await server.post("/api/users.list", user, {
       body: {
         query: "test",
         filter: "invited",
-        token: user.getJwtToken(),
       },
     });
     const body = await res.json();
@@ -166,9 +214,8 @@ describe("#users.list", () => {
     const admin = await buildAdmin({ teamId: team.id });
     await buildUser({ teamId: team.id });
 
-    const res = await server.post("/api/users.list", {
+    const res = await server.post("/api/users.list", admin, {
       body: {
-        token: admin.getJwtToken(),
         sort: "createdAt",
         direction: "DESC",
       },
@@ -183,9 +230,8 @@ describe("#users.list", () => {
     const admin = await buildAdmin({ teamId: team.id });
     const user = await buildUser({ teamId: team.id });
 
-    const res = await server.post("/api/users.list", {
+    const res = await server.post("/api/users.list", admin, {
       body: {
-        token: admin.getJwtToken(),
         ids: [user.id],
       },
     });
@@ -200,9 +246,8 @@ describe("#users.list", () => {
     const admin = await buildAdmin({ teamId: team.id });
     const user = await buildUser({ teamId: team.id });
 
-    const res = await server.post("/api/users.list", {
+    const res = await server.post("/api/users.list", admin, {
       body: {
-        token: admin.getJwtToken(),
         emails: [user.email],
       },
     });
@@ -218,9 +263,8 @@ describe("#users.list", () => {
     const user = await buildUser({ teamId: team.id });
 
     // Test with uppercase email
-    const res = await server.post("/api/users.list", {
+    const res = await server.post("/api/users.list", admin, {
       body: {
-        token: admin.getJwtToken(),
         emails: [user.email!.toUpperCase()],
       },
     });
@@ -237,9 +281,8 @@ describe("#users.list", () => {
       )
       .join("@");
 
-    const res2 = await server.post("/api/users.list", {
+    const res2 = await server.post("/api/users.list", admin, {
       body: {
-        token: admin.getJwtToken(),
         emails: [mixedCaseEmail],
       },
     });
@@ -249,31 +292,19 @@ describe("#users.list", () => {
     expect(body2.data[0].id).toEqual(user.id);
   });
 
-  it("should restrict guest from viewing other user's email", async () => {
+  it("should not allow guests to list users", async () => {
     const team = await buildTeam();
     await buildUser({ teamId: team.id });
     const guest = await buildUser({ teamId: team.id, role: UserRole.Guest });
-    const res = await server.post("/api/users.list", {
-      body: {
-        token: guest.getJwtToken(),
-      },
-    });
-    const body = await res.json();
-    expect(res.status).toEqual(200);
-    expect(body.data).toHaveLength(2);
-    expect(body.data[0].email).toEqual(undefined);
-    expect(body.data[1].email).toEqual(guest.email);
+    const res = await server.post("/api/users.list", guest);
+    expect(res.status).toEqual(403);
   });
 
   it("should restrict viewer from viewing other user's email", async () => {
     const team = await buildTeam();
     await buildUser({ teamId: team.id });
     const viewer = await buildUser({ teamId: team.id, role: UserRole.Viewer });
-    const res = await server.post("/api/users.list", {
-      body: {
-        token: viewer.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/users.list", viewer);
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data).toHaveLength(2);
@@ -285,11 +316,7 @@ describe("#users.list", () => {
     const team = await buildTeam();
     const user = await buildUser({ teamId: team.id });
     const member = await buildUser({ teamId: team.id, role: UserRole.Member });
-    const res = await server.post("/api/users.list", {
-      body: {
-        token: member.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/users.list", member);
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data).toHaveLength(2);
@@ -297,37 +324,11 @@ describe("#users.list", () => {
     expect(body.data[1].email).toEqual(member.email);
   });
 
-  it("should restrict guest from viewing other user's details", async () => {
-    const team = await buildTeam();
-    await buildUser({ teamId: team.id });
-    const guest = await buildUser({ teamId: team.id, role: UserRole.Guest });
-    const res = await server.post("/api/users.list", {
-      body: {
-        token: guest.getJwtToken(),
-      },
-    });
-    const body = await res.json();
-    expect(res.status).toEqual(200);
-    expect(body.data).toHaveLength(2);
-    expect(body.data[0].language).toEqual(undefined);
-    expect(body.data[0].preferences).toEqual(undefined);
-    expect(body.data[0].notificationSettings).toEqual(undefined);
-    expect(body.data[1].language).toEqual(guest.language);
-    expect(body.data[1].preferences).toEqual(guest.preferences);
-    expect(body.data[1].notificationSettings).toEqual(
-      guest.notificationSettings
-    );
-  });
-
   it("should restrict viewer from viewing other user's details", async () => {
     const team = await buildTeam();
     await buildUser({ teamId: team.id });
     const viewer = await buildUser({ teamId: team.id, role: UserRole.Viewer });
-    const res = await server.post("/api/users.list", {
-      body: {
-        token: viewer.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/users.list", viewer);
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data).toHaveLength(2);
@@ -345,11 +346,7 @@ describe("#users.list", () => {
     const team = await buildTeam();
     await buildUser({ teamId: team.id });
     const member = await buildUser({ teamId: team.id, role: UserRole.Member });
-    const res = await server.post("/api/users.list", {
-      body: {
-        token: member.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/users.list", member);
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data).toHaveLength(2);
@@ -367,11 +364,7 @@ describe("#users.list", () => {
     const team = await buildTeam();
     const admin = await buildAdmin({ teamId: team.id });
     const user = await buildUser({ teamId: team.id });
-    const res = await server.post("/api/users.list", {
-      body: {
-        token: admin.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/users.list", admin);
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data).toHaveLength(2);
@@ -388,14 +381,283 @@ describe("#users.list", () => {
   });
 });
 
+describe("#users.list filters", () => {
+  it("should filter by role", async () => {
+    const user = await buildUser({ name: "Tester" });
+    const admin = await buildAdmin({ name: "Admin", teamId: user.teamId });
+
+    const res = await server.post("/api/users.list", user, {
+      body: {
+        filters: [{ field: "role", operator: "eq", value: UserRole.Admin }],
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].id).toEqual(admin.id);
+  });
+
+  it("should filter by multiple roles", async () => {
+    const admin = await buildAdmin();
+    const viewer = await buildViewer({ teamId: admin.teamId });
+    await buildUser({ teamId: admin.teamId });
+
+    const res = await server.post("/api/users.list", admin, {
+      body: {
+        filters: [
+          {
+            field: "role",
+            operator: "in",
+            value: [UserRole.Admin, UserRole.Viewer],
+          },
+        ],
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.map((item: { id: string }) => item.id).sort()).toEqual(
+      [admin.id, viewer.id].sort()
+    );
+  });
+
+  it("should reject an unknown role value", async () => {
+    const user = await buildUser();
+
+    const res = await server.post("/api/users.list", user, {
+      body: {
+        filters: [{ field: "role", operator: "eq", value: "superuser" }],
+      },
+    });
+    expect(res.status).toEqual(400);
+  });
+
+  it("should reject a field that is not filterable", async () => {
+    const user = await buildUser();
+
+    const res = await server.post("/api/users.list", user, {
+      body: {
+        filters: [{ field: "jwtSecret", operator: "isNotNull" }],
+      },
+    });
+    expect(res.status).toEqual(400);
+  });
+
+  it("should filter by id", async () => {
+    const admin = await buildAdmin();
+    const user = await buildUser({ teamId: admin.teamId });
+
+    const res = await server.post("/api/users.list", admin, {
+      body: {
+        filters: [{ field: "id", operator: "in", value: [user.id] }],
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].id).toEqual(user.id);
+  });
+
+  it("should filter by email", async () => {
+    const admin = await buildAdmin();
+    const user = await buildUser({ teamId: admin.teamId });
+
+    const res = await server.post("/api/users.list", admin, {
+      body: {
+        filters: [{ field: "email", operator: "eq", value: user.email }],
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].id).toEqual(user.id);
+  });
+
+  it("should filter by name", async () => {
+    const user = await buildUser({ name: "Tester" });
+    await buildUser({ name: "Someone else", teamId: user.teamId });
+
+    const res = await server.post("/api/users.list", user, {
+      body: {
+        filters: [{ field: "name", operator: "contains", value: "test" }],
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].id).toEqual(user.id);
+  });
+
+  it("should filter to invited users", async () => {
+    const user = await buildUser({ name: "Tester" });
+    const invite = await buildInvite({ name: "Tester", teamId: user.teamId });
+
+    const res = await server.post("/api/users.list", user, {
+      body: {
+        filters: [{ field: "lastActiveAt", operator: "isNull" }],
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].id).toEqual(invite.id);
+  });
+
+  it("should exclude suspended users by default", async () => {
+    const admin = await buildAdmin();
+    await buildUser({
+      teamId: admin.teamId,
+      suspendedAt: new Date(),
+    });
+
+    const res = await server.post("/api/users.list", admin, {
+      body: {
+        filters: [{ field: "role", operator: "eq", value: UserRole.Member }],
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data).toHaveLength(0);
+  });
+
+  it("should include suspended users when the filter references suspendedAt", async () => {
+    const admin = await buildAdmin();
+    const suspended = await buildUser({
+      teamId: admin.teamId,
+      suspendedAt: new Date(),
+    });
+
+    const res = await server.post("/api/users.list", admin, {
+      body: {
+        filters: [{ field: "suspendedAt", operator: "isNotNull" }],
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].id).toEqual(suspended.id);
+  });
+
+  it("should return every status when the filter matches either suspendedAt state", async () => {
+    const admin = await buildAdmin();
+    await buildUser({
+      teamId: admin.teamId,
+      suspendedAt: new Date(),
+    });
+
+    const res = await server.post("/api/users.list", admin, {
+      body: {
+        filters: [
+          {
+            operator: "OR",
+            filters: [
+              { field: "suspendedAt", operator: "isNull" },
+              { field: "suspendedAt", operator: "isNotNull" },
+            ],
+          },
+        ],
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data).toHaveLength(2);
+  });
+
+  it("should not return suspended users to non-admins", async () => {
+    const user = await buildUser();
+    await buildUser({
+      teamId: user.teamId,
+      suspendedAt: new Date(),
+    });
+
+    const res = await server.post("/api/users.list", user, {
+      body: {
+        filters: [{ field: "suspendedAt", operator: "isNotNull" }],
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data).toHaveLength(0);
+  });
+
+  it("should support groups of conditions", async () => {
+    const admin = await buildAdmin({ name: "Tester" });
+    const viewer = await buildViewer({ name: "Tester", teamId: admin.teamId });
+    await buildUser({ name: "Tester", teamId: admin.teamId });
+
+    const res = await server.post("/api/users.list", admin, {
+      body: {
+        filters: [
+          { field: "name", operator: "eq", value: "Tester" },
+          {
+            operator: "OR",
+            filters: [
+              { field: "role", operator: "eq", value: UserRole.Admin },
+              { field: "role", operator: "eq", value: UserRole.Viewer },
+            ],
+          },
+        ],
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.map((item: { id: string }) => item.id).sort()).toEqual(
+      [admin.id, viewer.id].sort()
+    );
+  });
+
+  it("should filter by date", async () => {
+    const admin = await buildAdmin();
+    await buildUser({
+      teamId: admin.teamId,
+      lastActiveAt: new Date("2010-01-01T00:00:00.000Z"),
+    });
+
+    const res = await server.post("/api/users.list", admin, {
+      body: {
+        filters: [
+          { field: "lastActiveAt", operator: "gte", value: "2018-01-01" },
+        ],
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].id).toEqual(admin.id);
+  });
+
+  it("should reject filters combined with deprecated parameters", async () => {
+    const user = await buildUser();
+
+    const res = await server.post("/api/users.list", user, {
+      body: {
+        role: UserRole.Admin,
+        filters: [{ field: "role", operator: "eq", value: UserRole.Admin }],
+      },
+    });
+    expect(res.status).toEqual(400);
+  });
+
+  it("should allow filters combined with query", async () => {
+    const admin = await buildAdmin({ name: "Tester" });
+    await buildViewer({ name: "Tester", teamId: admin.teamId });
+
+    const res = await server.post("/api/users.list", admin, {
+      body: {
+        query: "test",
+        filters: [{ field: "role", operator: "eq", value: UserRole.Admin }],
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].id).toEqual(admin.id);
+  });
+});
+
 describe("#users.info", () => {
   it("should return current user with no id", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/users.info", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/users.info", user);
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data.id).toEqual(user.id);
@@ -408,9 +670,8 @@ describe("#users.info", () => {
     const another = await buildUser({
       teamId: user.teamId,
     });
-    const res = await server.post("/api/users.info", {
+    const res = await server.post("/api/users.info", user, {
       body: {
-        token: user.getJwtToken(),
         id: another.id,
       },
     });
@@ -425,9 +686,8 @@ describe("#users.info", () => {
   it("should now return user without permission", async () => {
     const user = await buildUser();
     const another = await buildUser();
-    const res = await server.post("/api/users.info", {
+    const res = await server.post("/api/users.info", user, {
       body: {
-        token: user.getJwtToken(),
         id: another.id,
       },
     });
@@ -443,9 +703,8 @@ describe("#users.info", () => {
 describe("#users.invite", () => {
   it("should return sent invites", async () => {
     const user = await buildAdmin();
-    const res = await server.post("/api/users.invite", {
+    const res = await server.post("/api/users.invite", user, {
       body: {
-        token: user.getJwtToken(),
         invites: [
           {
             email: "test@example.com",
@@ -462,9 +721,8 @@ describe("#users.invite", () => {
 
   it("should require invites to be an array", async () => {
     const admin = await buildAdmin();
-    const res = await server.post("/api/users.invite", {
+    const res = await server.post("/api/users.invite", admin, {
       body: {
-        token: admin.getJwtToken(),
         invites: {
           email: "test@example.com",
           name: "Test",
@@ -477,9 +735,8 @@ describe("#users.invite", () => {
 
   it("should allow members to invite members", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/users.invite", {
+    const res = await server.post("/api/users.invite", user, {
       body: {
-        token: user.getJwtToken(),
         invites: [
           {
             email: "test@example.com",
@@ -496,9 +753,8 @@ describe("#users.invite", () => {
 
   it("should now allow viewers to invite", async () => {
     const user = await buildViewer();
-    const res = await server.post("/api/users.invite", {
+    const res = await server.post("/api/users.invite", user, {
       body: {
-        token: user.getJwtToken(),
         invites: [
           {
             email: "test@example.com",
@@ -517,9 +773,8 @@ describe("#users.invite", () => {
     await team.save();
 
     const user = await buildUser({ teamId: team.id });
-    const res = await server.post("/api/users.invite", {
+    const res = await server.post("/api/users.invite", user, {
       body: {
-        token: user.getJwtToken(),
         invites: [
           {
             email: "test@example.com",
@@ -534,9 +789,8 @@ describe("#users.invite", () => {
 
   it("should invite user as an admin", async () => {
     const admin = await buildAdmin();
-    const res = await server.post("/api/users.invite", {
+    const res = await server.post("/api/users.invite", admin, {
       body: {
-        token: admin.getJwtToken(),
         invites: [
           {
             email: "test@example.com",
@@ -554,9 +808,8 @@ describe("#users.invite", () => {
 
   it("should invite user as a viewer", async () => {
     const admin = await buildAdmin();
-    const res = await server.post("/api/users.invite", {
+    const res = await server.post("/api/users.invite", admin, {
       body: {
-        token: admin.getJwtToken(),
         invites: [
           {
             email: "test@example.com",
@@ -574,10 +827,9 @@ describe("#users.invite", () => {
 
   it("should limit number of invites", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/users.invite", {
+    const res = await server.post("/api/users.invite", user, {
       body: {
-        token: user.getJwtToken(),
-        invites: new Array(21).fill({
+        invites: Array.from({ length: 21 }).fill({
           email: "test@example.com",
           name: "Test",
           role: "viewer",
@@ -599,11 +851,7 @@ describe("#users.delete", () => {
     await buildUser({
       teamId: user.teamId,
     });
-    const res = await server.post("/api/users.delete", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/users.delete", user);
     expect(res.status).toEqual(400);
   });
 
@@ -612,10 +860,9 @@ describe("#users.delete", () => {
     await buildUser({
       teamId: user.teamId,
     });
-    const res = await server.post("/api/users.delete", {
+    const res = await server.post("/api/users.delete", user, {
       body: {
         code: "123",
-        token: user.getJwtToken(),
       },
     });
     expect(res.status).toEqual(400);
@@ -626,10 +873,9 @@ describe("#users.delete", () => {
     await buildUser({
       teamId: user.teamId,
     });
-    const res = await server.post("/api/users.delete", {
+    const res = await server.post("/api/users.delete", user, {
       body: {
         code: user.deleteConfirmationCode,
-        token: user.getJwtToken(),
       },
     });
     expect(res.status).toEqual(200);
@@ -640,10 +886,9 @@ describe("#users.delete", () => {
     const user = await buildUser({
       teamId: admin.teamId,
     });
-    const res = await server.post("/api/users.delete", {
+    const res = await server.post("/api/users.delete", admin, {
       body: {
         id: user.id,
-        token: admin.getJwtToken(),
       },
     });
     expect(res.status).toEqual(200);
@@ -666,10 +911,9 @@ describe("#users.delete", () => {
       await buildUser({
         teamId: user.teamId,
       });
-      const res = await server.post("/api/users.delete", {
+      const res = await server.post("/api/users.delete", user, {
         body: {
           code: user.deleteConfirmationCode,
-          token: user.getJwtToken(),
         },
       });
       expect(res.status).toEqual(403);
@@ -680,10 +924,9 @@ describe("#users.delete", () => {
       await buildUser({
         teamId: admin.teamId,
       });
-      const res = await server.post("/api/users.delete", {
+      const res = await server.post("/api/users.delete", admin, {
         body: {
           code: admin.deleteConfirmationCode,
-          token: admin.getJwtToken(),
         },
       });
       expect(res.status).toEqual(403);
@@ -691,11 +934,7 @@ describe("#users.delete", () => {
 
     it("should not allow users to request their own deletion", async () => {
       const user = await buildUser();
-      const res = await server.post("/api/users.requestDelete", {
-        body: {
-          token: user.getJwtToken(),
-        },
-      });
+      const res = await server.post("/api/users.requestDelete", user);
       expect(res.status).toEqual(403);
     });
 
@@ -704,10 +943,9 @@ describe("#users.delete", () => {
       const user = await buildUser({
         teamId: admin.teamId,
       });
-      const res = await server.post("/api/users.delete", {
+      const res = await server.post("/api/users.delete", admin, {
         body: {
           id: user.id,
-          token: admin.getJwtToken(),
         },
       });
       expect(res.status).toEqual(200);
@@ -725,9 +963,8 @@ describe("#users.delete", () => {
 describe("#users.update", () => {
   it("should update user profile information", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/users.update", {
+    const res = await server.post("/api/users.update", user, {
       body: {
-        token: user.getJwtToken(),
         name: "New name",
       },
     });
@@ -741,10 +978,9 @@ describe("#users.update", () => {
     const user = await buildUser({
       teamId: admin.teamId,
     });
-    const res = await server.post("/api/users.update", {
+    const res = await server.post("/api/users.update", admin, {
       body: {
         id: user.id,
-        token: admin.getJwtToken(),
         name: "New name",
       },
     });
@@ -759,10 +995,9 @@ describe("#users.update", () => {
     const user = await buildUser({
       teamId: actor.teamId,
     });
-    const res = await server.post("/api/users.update", {
+    const res = await server.post("/api/users.update", actor, {
       body: {
         id: user.id,
-        token: actor.getJwtToken(),
         name: "New name",
       },
     });
@@ -771,9 +1006,8 @@ describe("#users.update", () => {
 
   it("should fail upon sending invalid user preference", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/users.update", {
+    const res = await server.post("/api/users.update", user, {
       body: {
-        token: user.getJwtToken(),
         name: "New name",
         preferences: { invalidPreference: "invalidValue" },
       },
@@ -783,9 +1017,8 @@ describe("#users.update", () => {
 
   it("should fail upon sending invalid user preference value", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/users.update", {
+    const res = await server.post("/api/users.update", user, {
       body: {
-        token: user.getJwtToken(),
         name: "New name",
         preferences: { rememberLastPath: "invalidValue" },
       },
@@ -795,9 +1028,8 @@ describe("#users.update", () => {
 
   it("should update rememberLastPath user preference", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/users.update", {
+    const res = await server.post("/api/users.update", user, {
       body: {
-        token: user.getJwtToken(),
         name: "New name",
         preferences: {
           rememberLastPath: true,
@@ -809,11 +1041,52 @@ describe("#users.update", () => {
     expect(body.data.preferences.rememberLastPath).toBe(true);
   });
 
+  it("should update sidebarSectionOrder user preference", async () => {
+    const user = await buildUser();
+    const res = await server.post("/api/users.update", user, {
+      body: {
+        preferences: {
+          sidebarSectionOrder: ["collections", "starred", "shared"],
+        },
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.preferences.sidebarSectionOrder).toEqual([
+      "collections",
+      "starred",
+      "shared",
+    ]);
+  });
+
+  it("should fail upon sending a preference value of the wrong type", async () => {
+    const user = await buildUser();
+    const res = await server.post("/api/users.update", user, {
+      body: {
+        preferences: {
+          rememberLastPath: ["starred"],
+        },
+      },
+    });
+    expect(res.status).toEqual(400);
+  });
+
+  it("should fail upon sending invalid sidebarSectionOrder user preference", async () => {
+    const user = await buildUser();
+    const res = await server.post("/api/users.update", user, {
+      body: {
+        preferences: {
+          sidebarSectionOrder: ["invalidSection"],
+        },
+      },
+    });
+    expect(res.status).toEqual(400);
+  });
+
   it("should update user timezone", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/users.update", {
+    const res = await server.post("/api/users.update", user, {
       body: {
-        token: user.getJwtToken(),
         timezone: "Asia/Calcutta",
       },
     });
@@ -833,11 +1106,10 @@ describe("#users.update", () => {
 describe("#users.updateEmail", () => {
   describe("post", () => {
     it("should trigger verification email", async () => {
-      const spy = jest.spyOn(ConfirmUpdateEmail.prototype, "schedule");
+      const spy = vi.spyOn(ConfirmUpdateEmail.prototype, "schedule");
       const user = await buildUser();
-      const res = await server.post("/api/users.updateEmail", {
+      const res = await server.post("/api/users.updateEmail", user, {
         body: {
-          token: user.getJwtToken(),
           email: faker.internet.email(),
         },
       });
@@ -858,9 +1130,8 @@ describe("#users.updateEmail", () => {
         createdById: user.id,
       });
 
-      const res = await server.post("/api/users.updateEmail", {
+      const res = await server.post("/api/users.updateEmail", user, {
         body: {
-          token: user.getJwtToken(),
           email: faker.internet.email(),
         },
       });
@@ -874,9 +1145,8 @@ describe("#users.updateEmail", () => {
       const email = faker.internet.email().toLowerCase();
       await buildUser({ teamId: user.teamId, email });
 
-      const res = await server.post("/api/users.updateEmail", {
+      const res = await server.post("/api/users.updateEmail", user, {
         body: {
-          token: user.getJwtToken(),
           email,
         },
       });
@@ -898,9 +1168,10 @@ describe("#users.updateEmail", () => {
       const user = await buildUser();
       const email = faker.internet.email();
       await server.get(
-        `/api/users.updateEmail?token=${user.getJwtToken()}&code=${user.getEmailUpdateToken(
+        `/api/users.updateEmail?code=${user.getEmailUpdateToken(
           email
-        )}&follow=true`
+        )}&follow=true`,
+        user
       );
 
       await user.reload();
@@ -915,9 +1186,8 @@ describe("#users.update_role", () => {
     const admin = await buildAdmin({ teamId: team.id });
     const user = await buildUser({ teamId: team.id });
 
-    const res = await server.post("/api/users.update_role", {
+    const res = await server.post("/api/users.update_role", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: user.id,
         role: UserRole.Admin,
       },
@@ -931,9 +1201,8 @@ describe("#users.update_role", () => {
     const admin = await buildAdmin({ teamId: team.id });
     const user = await buildAdmin({ teamId: team.id });
 
-    const res = await server.post("/api/users.update_role", {
+    const res = await server.post("/api/users.update_role", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: user.id,
         role: UserRole.Viewer,
       },
@@ -947,9 +1216,8 @@ describe("#users.update_role", () => {
     const admin = await buildAdmin({ teamId: team.id });
     const user = await buildAdmin({ teamId: team.id });
 
-    const res = await server.post("/api/users.update_role", {
+    const res = await server.post("/api/users.update_role", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: user.id,
         role: UserRole.Admin,
       },
@@ -964,9 +1232,8 @@ describe("#users.promote", () => {
     const admin = await buildAdmin({ teamId: team.id });
     const user = await buildUser({ teamId: team.id });
 
-    const res = await server.post("/api/users.promote", {
+    const res = await server.post("/api/users.promote", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: user.id,
       },
     });
@@ -975,9 +1242,8 @@ describe("#users.promote", () => {
 
   it("should require admin", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/users.promote", {
+    const res = await server.post("/api/users.promote", user, {
       body: {
-        token: user.getJwtToken(),
         id: user.id,
       },
     });
@@ -993,9 +1259,8 @@ describe("#users.demote", () => {
     const admin = await buildAdmin({ teamId: team.id });
     const user = await buildAdmin({ teamId: team.id });
 
-    const res = await server.post("/api/users.demote", {
+    const res = await server.post("/api/users.demote", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: user.id,
       },
     });
@@ -1007,9 +1272,8 @@ describe("#users.demote", () => {
     const admin = await buildAdmin({ teamId: team.id });
     const user = await buildAdmin({ teamId: team.id });
 
-    const res = await server.post("/api/users.demote", {
+    const res = await server.post("/api/users.demote", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: user.id,
         to: "viewer",
       },
@@ -1022,9 +1286,8 @@ describe("#users.demote", () => {
     const admin = await buildAdmin({ teamId: team.id });
     const user = await buildAdmin({ teamId: team.id });
 
-    const res = await server.post("/api/users.demote", {
+    const res = await server.post("/api/users.demote", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: user.id,
         to: "member",
       },
@@ -1035,9 +1298,8 @@ describe("#users.demote", () => {
   it("should not allow demoting self", async () => {
     const admin = await buildAdmin();
     await buildAdmin({ teamId: admin.teamId });
-    const res = await server.post("/api/users.demote", {
+    const res = await server.post("/api/users.demote", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: admin.id,
       },
     });
@@ -1048,9 +1310,8 @@ describe("#users.demote", () => {
 
   it("should require admin", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/users.promote", {
+    const res = await server.post("/api/users.promote", user, {
       body: {
-        token: user.getJwtToken(),
         id: user.id,
       },
     });
@@ -1066,9 +1327,8 @@ describe("#users.suspend", () => {
     const admin = await buildAdmin({ teamId: team.id });
     const user = await buildUser({ teamId: team.id });
 
-    const res = await server.post("/api/users.suspend", {
+    const res = await server.post("/api/users.suspend", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: user.id,
       },
     });
@@ -1077,9 +1337,8 @@ describe("#users.suspend", () => {
 
   it("should not allow suspending self", async () => {
     const admin = await buildAdmin();
-    const res = await server.post("/api/users.suspend", {
+    const res = await server.post("/api/users.suspend", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: admin.id,
       },
     });
@@ -1090,9 +1349,8 @@ describe("#users.suspend", () => {
 
   it("should require admin", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/users.suspend", {
+    const res = await server.post("/api/users.suspend", user, {
       body: {
-        token: user.getJwtToken(),
         id: user.id,
       },
     });
@@ -1113,9 +1371,8 @@ describe("#users.activate", () => {
       suspendedAt: new Date(),
     });
     expect(user.isSuspended).toBe(true);
-    const res = await server.post("/api/users.activate", {
+    const res = await server.post("/api/users.activate", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: user.id,
       },
     });
@@ -1124,9 +1381,8 @@ describe("#users.activate", () => {
 
   it("should require admin", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/users.activate", {
+    const res = await server.post("/api/users.activate", user, {
       body: {
-        token: user.getJwtToken(),
         id: user.id,
       },
     });

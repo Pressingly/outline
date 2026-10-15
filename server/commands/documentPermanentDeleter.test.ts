@@ -1,17 +1,15 @@
 import { subDays } from "date-fns";
+import { errToString } from "@shared/utils/error";
 import { Attachment, Document } from "@server/models";
-import DeleteAttachmentTask from "@server/queues/tasks/DeleteAttachmentTask";
-import { buildAttachment, buildDocument } from "@server/test/factories";
+import {
+  buildAttachment,
+  buildDocument,
+  buildDraftDocument,
+} from "@server/test/factories";
+import { mockTaskSchedule } from "@server/test/support";
 import documentPermanentDeleter from "./documentPermanentDeleter";
 
-jest.mock("@server/queues/tasks/DeleteAttachmentTask");
-
-const schedule = jest.fn();
-
-beforeEach(() => {
-  jest.resetAllMocks();
-  DeleteAttachmentTask.prototype.schedule = schedule;
-});
+const schedule = mockTaskSchedule();
 
 describe("documentPermanentDeleter", () => {
   it("should destroy documents", async () => {
@@ -40,7 +38,7 @@ describe("documentPermanentDeleter", () => {
     try {
       await documentPermanentDeleter([document]);
     } catch (err) {
-      error = err.message;
+      error = errToString(err);
     }
 
     expect(error).toEqual(
@@ -137,6 +135,44 @@ describe("documentPermanentDeleter", () => {
         paranoid: false,
       })
     ).toEqual(1);
+  });
+
+  it("should not detach children of a document restored between query and destroy", async () => {
+    const parent = await buildDocument({
+      publishedAt: subDays(new Date(), 90),
+      deletedAt: subDays(new Date(), 60),
+    });
+    const child = await buildDocument({
+      teamId: parent.teamId,
+      parentDocumentId: parent.id,
+    });
+
+    await Document.unscoped().update(
+      { deletedAt: null },
+      { where: { id: parent.id }, paranoid: false }
+    );
+
+    await documentPermanentDeleter([parent]);
+
+    await child.reload();
+    expect(child.parentDocumentId).toEqual(parent.id);
+  });
+
+  it("should detach draft children rather than cascade delete them", async () => {
+    const parent = await buildDocument({
+      publishedAt: subDays(new Date(), 90),
+      deletedAt: subDays(new Date(), 60),
+    });
+    const child = await buildDraftDocument({
+      teamId: parent.teamId,
+      parentDocumentId: parent.id,
+    });
+
+    const countDeletedDoc = await documentPermanentDeleter([parent]);
+    expect(countDeletedDoc).toEqual(1);
+
+    const reloaded = await Document.unscoped().findByPk(child.id);
+    expect(reloaded?.parentDocumentId).toEqual(null);
   });
 
   it("should not destroy attachments referenced in other documents", async () => {

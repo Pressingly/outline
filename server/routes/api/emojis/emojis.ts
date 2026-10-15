@@ -14,6 +14,7 @@ import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import pagination from "../middlewares/pagination";
 import * as T from "./schema";
 import { getTeamFromContext } from "@server/utils/passport";
+import { QueryHelper } from "@server/storage/QueryHelper";
 import { loadPublicShare } from "@server/commands/shareLoader";
 import { AuthorizationError } from "@server/errors";
 
@@ -85,7 +86,7 @@ router.get(
 
     if (shareId) {
       const teamFromCtx = await getTeamFromContext(ctx, {
-        includeStateCookie: false,
+        includeOAuthState: false,
       });
       const { share } = await loadPublicShare({
         id: shareId,
@@ -126,9 +127,7 @@ router.post(
     if (query) {
       where = {
         ...where,
-        name: {
-          [Op.iLike]: `%${query}%`,
-        },
+        name: { [Op.iLike]: QueryHelper.likeContains(query) },
       };
     }
 

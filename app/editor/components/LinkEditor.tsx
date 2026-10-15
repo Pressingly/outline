@@ -10,6 +10,7 @@ import type { Mark } from "prosemirror-model";
 import type { EditorView } from "prosemirror-view";
 import * as React from "react";
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import styled from "styled-components";
 import Icon from "@shared/components/Icon";
 import { hideScrollbars, s } from "@shared/styles";
@@ -18,7 +19,6 @@ import DocumentBreadcrumb from "~/components/DocumentBreadcrumb";
 import Flex from "~/components/Flex";
 import { ResizingHeightContainer } from "~/components/ResizingHeightContainer";
 import Scrollable from "~/components/Scrollable";
-import type { Dictionary } from "~/hooks/useDictionary";
 import useRequest from "~/hooks/useRequest";
 import useStores from "~/hooks/useStores";
 import { client } from "~/utils/ApiClient";
@@ -31,7 +31,6 @@ import { useEditor } from "./EditorContext";
 
 type Props = {
   mark?: Mark;
-  dictionary: Dictionary;
   view: EditorView;
   autoFocus?: boolean;
   onLinkAdd: () => void;
@@ -44,7 +43,6 @@ type Props = {
 
 const LinkEditor: React.FC<Props> = ({
   mark,
-  dictionary,
   view,
   autoFocus,
   onLinkAdd,
@@ -54,6 +52,7 @@ const LinkEditor: React.FC<Props> = ({
   onClickOutside,
   onClickBack,
 }) => {
+  const { t } = useTranslation();
   const getHref = () => sanitizeUrl(mark?.attrs.href) ?? "";
   const initialValue = getHref();
   const { commands } = useEditor();
@@ -80,6 +79,15 @@ const LinkEditor: React.FC<Props> = ({
       void request();
     }
   }, [trimmedQuery, request]);
+
+  // Focus imperatively rather than with the autoFocus attribute, which only
+  // applies on mount – the editor can already be open when focus is requested.
+  useEffect(() => {
+    if (autoFocus) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [autoFocus]);
 
   useOnClickOutside(wrapperRef, (ev) => {
     // If the link is totally empty or only spaces then remove the mark
@@ -183,21 +191,21 @@ const LinkEditor: React.FC<Props> = ({
   const isInternal = isInternalUrl(query);
   const actions = [
     {
-      tooltip: isInternal ? dictionary.goToLink : dictionary.openLink,
+      tooltip: isInternal ? t("Go to link") : t("Open link"),
       icon: isInternal ? <ArrowIcon /> : <OpenIcon />,
       visible: true,
       disabled: !query,
       handler: openLink,
     },
     {
-      tooltip: dictionary.removeLink,
+      tooltip: t("Remove link"),
       icon: <CloseIcon />,
       visible: view.editable,
       disabled: false,
       handler: removeLink,
     },
     {
-      tooltip: dictionary.formattingControls,
+      tooltip: t("Formatting controls"),
       icon: <ReturnIcon />,
       visible: view.editable,
       disabled: false,
@@ -211,11 +219,10 @@ const LinkEditor: React.FC<Props> = ({
         <Input
           ref={inputRef}
           value={query}
-          placeholder={dictionary.searchOrPasteLink}
+          placeholder={`${t("Search or paste a link")}…`}
           onKeyDown={handleKeyDown}
           onChange={handleSearch}
           onFocus={handleSearch}
-          autoFocus={autoFocus}
           readOnly={!view.editable}
         />
         {actions.map((action, index) => {
@@ -252,12 +259,7 @@ const LinkEditor: React.FC<Props> = ({
                   selected={index === selectedIndex}
                   key={doc.id}
                   subtitle={
-                    <DocumentBreadcrumb
-                      document={doc}
-                      onlyText
-                      reverse
-                      maxDepth={2}
-                    />
+                    <DocumentBreadcrumb document={doc} onlyText maxDepth={2} />
                   }
                   title={doc.title}
                   icon={

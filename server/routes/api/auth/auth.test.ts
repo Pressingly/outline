@@ -1,11 +1,18 @@
 import { faker } from "@faker-js/faker";
 import { randomUUID } from "node:crypto";
-import { buildUser, buildTeam, buildUserPasskey } from "@server/test/factories";
+import { Scope } from "@shared/types";
+import {
+  buildApiKey,
+  buildOAuthAuthentication,
+  buildUser,
+  buildTeam,
+  buildUserPasskey,
+} from "@server/test/factories";
 import { getTestServer, setSelfHosted } from "@server/test/support";
 
 const mockTeamInSessionId = randomUUID();
 
-jest.mock("@server/utils/authentication", () => ({
+vi.mock("@server/utils/authentication", () => ({
   getSessionsInCookie() {
     return { [mockTeamInSessionId]: {} };
   },
@@ -27,11 +34,7 @@ describe("#auth.info", () => {
       teamId: team2.id,
       email: user.email,
     });
-    const res = await server.post("/api/auth.info", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/auth.info", user);
     const body = await res.json();
     expect(res.status).toEqual(200);
 
@@ -48,15 +51,48 @@ describe("#auth.info", () => {
     expect(body.data.team.allowedDomains).toEqual([]);
   });
 
+  it("should return a collaboration token for a session", async () => {
+    const user = await buildUser();
+    const res = await server.post("/api/auth.info", user);
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.collaborationToken).toBeTruthy();
+  });
+
+  it("should not return a collaboration token for an API key", async () => {
+    const user = await buildUser();
+    const key = await buildApiKey({ userId: user.id });
+    const res = await server.post("/api/auth.info", {
+      headers: {
+        Authorization: `Bearer ${key.value}`,
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.collaborationToken).toBeUndefined();
+  });
+
+  it("should not return a collaboration token for an OAuth access token", async () => {
+    const user = await buildUser();
+    const authentication = await buildOAuthAuthentication({
+      user,
+      scope: [Scope.Read],
+    });
+    const res = await server.post("/api/auth.info", {
+      headers: {
+        Authorization: `Bearer ${authentication.accessToken}`,
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.collaborationToken).toBeUndefined();
+  });
+
   it("should require the team to not be deleted", async () => {
     const team = await buildTeam();
     const user = await buildUser({ teamId: team.id });
     await team.destroy();
-    const res = await server.post("/api/auth.info", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/auth.info", user);
     expect(res.status).toEqual(401);
   });
 
@@ -69,18 +105,10 @@ describe("#auth.info", () => {
 describe("#auth.delete", () => {
   it("should make the access token unusable", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/auth.delete", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/auth.delete", user);
     expect(res.status).toEqual(200);
 
-    const res2 = await server.post("/api/auth.info", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res2 = await server.post("/api/auth.info", user);
     expect(res2.status).toEqual(401);
   });
 

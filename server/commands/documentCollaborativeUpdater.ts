@@ -1,8 +1,10 @@
 import isEqual from "fast-deep-equal";
-import uniq from "lodash/uniq";
+import { uniq } from "es-toolkit/compat";
+import { Node } from "prosemirror-model";
 import { yDocToProsemirrorJSON } from "y-prosemirror";
 import * as Y from "yjs";
 import type { ProsemirrorData } from "@shared/types";
+import { schema } from "@server/editor";
 import Logger from "@server/logging/Logger";
 import { Document, Event } from "@server/models";
 import { sequelize } from "@server/storage/database";
@@ -50,7 +52,17 @@ export default async function documentCollaborativeUpdater({
       });
 
     const state = Y.encodeStateAsUpdate(ydoc);
-    const content = yDocToProsemirrorJSON(ydoc, "default") as ProsemirrorData;
+
+    // Round-trip through the schema so the stored JSON is canonical. The raw
+    // y-prosemirror output includes empty `attrs: {}` on every mark, and outputs
+    // properties in a different order - resulting in spurious "edits". The JSON
+    // round-trip additionally drops undefined-valued attrs, which are absent
+    // from previously stored content but present on `Node.toJSON` output.
+    const content = JSON.parse(
+      JSON.stringify(
+        Node.fromJSON(schema, yDocToProsemirrorJSON(ydoc, "default")).toJSON()
+      )
+    ) as ProsemirrorData;
     const isUnchanged = isEqual(document.content, content);
     const isDeleted = !!document.deletedAt;
     const lastModifiedById = isDeleted
@@ -71,7 +83,7 @@ export default async function documentCollaborativeUpdater({
     const pud = new Y.PermanentUserData(ydoc);
     const pudIds = Array.from(pud.clients.values());
     const collaboratorIds = uniq([
-      ...document.collaboratorIds,
+      ...(document.collaboratorIds ?? []),
       ...sessionCollaboratorIds,
       ...pudIds,
     ]);
@@ -94,6 +106,9 @@ export default async function documentCollaborativeUpdater({
         lastModifiedById,
         collaboratorIds,
         editorVersion,
+        // Hooks are disabled below, so the revision increment that normally
+        // happens in BeforeUpdate must be applied manually.
+        revisionCount: document.revisionCount + 1,
       },
       {
         transaction,

@@ -1,4 +1,3 @@
-import JSZip from "jszip";
 import type { NavigationNode } from "@shared/types";
 import { FileOperationFormat } from "@shared/types";
 import type { Collection, FileOperation } from "@server/models";
@@ -10,10 +9,7 @@ export default class ExportHTMLZipTask extends ExportDocumentTreeTask {
     collections: Collection[],
     fileOperation: FileOperation
   ) {
-    const zip = new JSZip();
-
     return await this.addCollectionsToArchive(
-      zip,
       collections,
       FileOperationFormat.HTMLZip,
       fileOperation.options?.includeAttachments ?? true
@@ -22,15 +18,14 @@ export default class ExportHTMLZipTask extends ExportDocumentTreeTask {
 
   public async exportDocument(
     document: Document,
-    documentStructure: NavigationNode[]
+    documentStructure: NavigationNode[],
+    includeAttachments: boolean
   ): Promise<string> {
-    const zip = new JSZip();
-
     return await this.addDocumentToArchive({
       document,
       documentStructure,
       format: FileOperationFormat.HTMLZip,
-      zip,
+      includeAttachments,
     });
   }
 }
