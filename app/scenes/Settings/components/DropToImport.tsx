@@ -5,10 +5,18 @@ import Dropzone from "react-dropzone";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import styled from "styled-components";
-import { s } from "@shared/styles";
-import { AttachmentPreset, CollectionPermission } from "@shared/types";
+import { errToString } from "@shared/utils/error";
+import {
+  AttachmentPreset,
+  CollectionPermission,
+  type ImportableIntegrationService,
+} from "@shared/types";
 import { bytesToHumanReadable } from "@shared/utils/files";
 import Button from "~/components/Button";
+import {
+  DropzoneContainer,
+  dropzoneIcon,
+} from "~/components/DropzoneContainer";
 import Flex from "~/components/Flex";
 import { InputSelectPermission } from "~/components/InputSelectPermission";
 import LoadingIndicator from "~/components/LoadingIndicator";
@@ -19,17 +27,19 @@ import { uploadFile } from "~/utils/files";
 
 type Props = {
   children: JSX.Element;
-  format?: string;
+  /** The importable service to create an import for. */
+  service: ImportableIntegrationService;
   disabled?: boolean;
   activeClassName?: string;
   onSubmit: () => void;
 };
 
-function DropToImport({ disabled, onSubmit, children, format }: Props) {
+function DropToImport({ disabled, onSubmit, children, service }: Props) {
   const { t } = useTranslation();
-  const { collections } = useStores();
+  const { imports } = useStores();
   const [file, setFile] = useState<File | null>(null);
   const [isImporting, setImporting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [permission, setPermission] = useState<CollectionPermission | null>(
     CollectionPermission.ReadWrite
   );
@@ -47,13 +57,23 @@ function DropToImport({ disabled, onSubmit, children, format }: Props) {
       return;
     }
     setImporting(true);
+    setUploadProgress(0);
 
     try {
       const attachment = await uploadFile(file, {
         name: file.name,
         preset: AttachmentPreset.WorkspaceImport,
+        onProgress: (progress) => setUploadProgress(progress),
       });
-      await collections.import(attachment.id, { format, permission });
+
+      await imports.create(
+        { service },
+        {
+          attachmentId: attachment.id,
+          permission: permission ?? undefined,
+        }
+      );
+
       onSubmit();
       toast.message(file.name, {
         description: t(
@@ -61,9 +81,10 @@ function DropToImport({ disabled, onSubmit, children, format }: Props) {
         ),
       });
     } catch (err) {
-      toast.error(err.message);
+      toast.error(errToString(err));
     } finally {
       setImporting(false);
+      setUploadProgress(0);
     }
   };
 
@@ -86,7 +107,7 @@ function DropToImport({ disabled, onSubmit, children, format }: Props) {
           disabled={isImporting}
         >
           {({ getRootProps, getInputProps, isDragActive }) => (
-            <DropzoneContainer
+            <Container
               {...getRootProps()}
               $disabled={isImporting}
               $isDragActive={isDragActive}
@@ -99,7 +120,7 @@ function DropToImport({ disabled, onSubmit, children, format }: Props) {
                   ? t(`${file.name} (${bytesToHumanReadable(file.size)})`)
                   : children}
               </Flex>
-            </DropzoneContainer>
+            </Container>
           )}
         </Dropzone>
       </Text>
@@ -119,7 +140,11 @@ function DropToImport({ disabled, onSubmit, children, format }: Props) {
       </div>
       <Flex justify="flex-end">
         <Button disabled={!file || isImporting} onClick={handleStartImport}>
-          {isImporting ? t("Uploading") + "…" : t("Start import")}
+          {isImporting
+            ? t("Uploading {{progress}}%", {
+                progress: Math.min(99, Math.floor(uploadProgress * 100)),
+              })
+            : t("Start import")}
         </Button>
       </Flex>
     </Flex>
@@ -127,31 +152,11 @@ function DropToImport({ disabled, onSubmit, children, format }: Props) {
 }
 
 const Icon = styled(NewDocumentIcon)`
-  padding: 4px;
-  border-radius: 50%;
-  background: ${(props) => props.theme.brand.blue};
-  color: white;
+  ${dropzoneIcon}
 `;
 
-const DropzoneContainer = styled.div<{
-  $disabled: boolean;
-  $isDragActive: boolean;
-}>`
-  background: ${(props) =>
-    props.$isDragActive
-      ? props.theme.backgroundSecondary
-      : props.theme.background};
-  border-radius: 8px;
-  border: 1px dashed ${s("divider")};
+const Container = styled(DropzoneContainer)`
   padding: 52px;
-  text-align: center;
-  font-size: 15px;
-  cursor: var(--pointer);
-  opacity: ${(props) => (props.$disabled ? 0.5 : 1)};
-
-  &:hover {
-    background: ${s("backgroundSecondary")};
-  }
 `;
 
 export default observer(DropToImport);

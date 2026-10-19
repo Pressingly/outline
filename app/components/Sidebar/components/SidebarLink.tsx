@@ -12,9 +12,20 @@ import { undraggableOnDesktop } from "~/styles";
 import Disclosure from "./Disclosure";
 import type { Props as NavLinkProps } from "./NavLink";
 import NavLink from "./NavLink";
-import type { ActionWithChildren } from "~/types";
+import type { ActionFactory, ActionWithChildren } from "~/types";
 import { ContextMenu } from "~/components/Menu/ContextMenu";
 import { useTranslation } from "react-i18next";
+
+/**
+ * Returns the inline-start offset in pixels of a sidebar row's content at the
+ * given nesting depth.
+ *
+ * @param depth The nesting depth of the row, 0-based.
+ * @returns the offset in pixels.
+ */
+export function indentForDepth(depth: number): number {
+  return depth * 16 + 12;
+}
 
 /**
  * Props for the SidebarLink component.
@@ -58,7 +69,7 @@ type Props = Omit<NavLinkProps, "to"> & {
   /** Whether to automatically scroll this link into view if needed */
   scrollIntoViewIfNeeded?: boolean;
   /** Optional context menu action to display */
-  contextAction?: ActionWithChildren;
+  contextAction?: ActionWithChildren | ActionFactory;
 };
 
 const activeDropStyle = {
@@ -104,7 +115,7 @@ function SidebarLink(
   const { handleMouseEnter, handleMouseLeave } = useClickIntent(onClickIntent);
   const style = React.useMemo(
     () => ({
-      paddingInlineStart: `${(depth || 0) * 16 + (icon ? -8 : 12)}px`,
+      paddingInlineStart: `${indentForDepth(depth || 0) - (icon ? 20 : 0)}px`,
       paddingInlineEnd: unreadBadge ? "32px" : undefined,
     }),
     [depth, icon, unreadBadge]
@@ -237,6 +248,11 @@ const Content = styled.span`
 const Actions = styled(EventBoundary)<{ $showActions?: boolean }>`
   display: inline-flex;
   visibility: ${(props) => (props.$showActions ? "visible" : "hidden")};
+
+  [data-drag-active] & {
+    display: none;
+  }
+
   position: absolute;
   top: 3px;
   inset-inline-end: 4px;
@@ -295,7 +311,6 @@ const Link = styled(NavLink)<{
   min-height: 30px;
   user-select: none;
   white-space: nowrap;
-  margin-top: 1px;
   background: var(--background);
   color: ${(props) =>
     props.$isActiveDrop ? props.theme.white : props.theme.sidebarText};
@@ -331,7 +346,8 @@ const Link = styled(NavLink)<{
     transition: fill 50ms;
   }
 
-  &: ${hover} {
+  &: ${hover},
+  &:has([data-state="open"]) {
     ${HiddenDisclosure} {
       display: block;
     }
@@ -349,7 +365,9 @@ const Link = styled(NavLink)<{
   `}
 
   @media (hover: hover) {
-    &:hover ${Actions}, &:active ${Actions} {
+    &:hover ${Actions},
+    &:active ${Actions},
+    &:has([data-state="open"]) ${Actions} {
       visibility: visible;
 
       svg {
@@ -357,7 +375,8 @@ const Link = styled(NavLink)<{
       }
     }
 
-    &:hover {
+    &:hover,
+    &:has([data-state="open"]) {
       color: ${(props) =>
         props.$isActiveDrop ? props.theme.white : props.theme.text};
     }

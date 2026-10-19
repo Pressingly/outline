@@ -6,8 +6,15 @@ import { UserRole } from "@shared/types";
 import { User, Team } from "@server/models";
 import { authorize, can } from "@server/policies";
 import { presentUser } from "@server/presenters";
+import { QueryHelper } from "@server/storage/QueryHelper";
 import AuthenticationHelper from "@shared/helpers/AuthenticationHelper";
-import { error, success, getActorFromContext, withTracing } from "./util";
+import {
+  error,
+  success,
+  getActorFromContext,
+  optionalString,
+  withTracing,
+} from "./util";
 
 /**
  * Registers user-related MCP tools on the given server, filtered by the
@@ -28,12 +35,9 @@ export function userTools(server: McpServer, scopes: string[]) {
           readOnlyHint: true,
         },
         inputSchema: {
-          query: z
-            .string()
-            .optional()
-            .describe(
-              "An optional search query to filter users by name or email."
-            ),
+          query: optionalString().describe(
+            "An optional search query to filter users by name or email."
+          ),
           role: z
             .enum([
               UserRole.Admin,
@@ -47,7 +51,7 @@ export function userTools(server: McpServer, scopes: string[]) {
             .enum(["active", "suspended", "invited", "all"])
             .optional()
             .describe(
-              "Filter users by status. 'suspended' is only available to admins. Defaults to active, non-suspended users."
+              "Filter users by status. Defaults to active, non-suspended users. Note filtering by 'suspended' is only available to admins."
             ),
           offset: z.coerce
             .number()
@@ -145,7 +149,9 @@ export function userTools(server: McpServer, scopes: string[]) {
               };
             }
 
-            const replacements = { query: `%${query}%` };
+            const replacements = {
+              query: QueryHelper.likeContains(query ?? ""),
+            };
 
             const users = await User.findAll({
               where,

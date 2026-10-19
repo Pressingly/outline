@@ -1,4 +1,14 @@
-import { buildAdmin, buildApiKey, buildUser } from "@server/test/factories";
+import { AUTH_TYPE_SSO } from "@shared/constants";
+import { randomString } from "@shared/random";
+import env from "@server/env";
+import { ApiKey } from "@server/models";
+import {
+  buildAdmin,
+  buildApiKey,
+  buildGuestUser,
+  buildUser,
+  buildViewer,
+} from "@server/test/factories";
 import { getTestServer } from "@server/test/support";
 
 const server = getTestServer();
@@ -8,9 +18,8 @@ describe("#apiKeys.create", () => {
     const now = new Date();
     const user = await buildUser();
 
-    const res = await server.post("/api/apiKeys.create", {
+    const res = await server.post("/api/apiKeys.create", user, {
       body: {
-        token: user.getJwtToken(),
         name: "My API Key",
         expiresAt: now.toISOString(),
       },
@@ -26,9 +35,8 @@ describe("#apiKeys.create", () => {
   it("should allow creating an api key without expiry", async () => {
     const user = await buildUser();
 
-    const res = await server.post("/api/apiKeys.create", {
+    const res = await server.post("/api/apiKeys.create", user, {
       body: {
-        token: user.getJwtToken(),
         name: "My API Key",
       },
     });
@@ -40,12 +48,41 @@ describe("#apiKeys.create", () => {
     expect(body.data.lastActiveAt).toBeNull();
   });
 
+  it("should allow the wildcard scope", async () => {
+    const user = await buildUser();
+
+    const res = await server.post("/api/apiKeys.create", user, {
+      body: {
+        name: "My API Key",
+        scope: ["*"],
+      },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data.scope).toEqual(["*"]);
+  });
+
+  it("should reject malformed scopes", async () => {
+    const user = await buildUser();
+
+    const res = await server.post("/api/apiKeys.create", user, {
+      body: {
+        name: "My API Key",
+        scope: ["documents:read,documents:write"],
+      },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(400);
+    expect(body.message).toContain("Scope must be a valid API scope");
+  });
+
   it("should allow creating an api key with scopes", async () => {
     const user = await buildUser();
 
-    const res = await server.post("/api/apiKeys.create", {
+    const res = await server.post("/api/apiKeys.create", user, {
       body: {
-        token: user.getJwtToken(),
         name: "My API Key",
         scope: [
           "/api/documents.list",
@@ -73,10 +110,113 @@ describe("#apiKeys.create", () => {
     ]);
   });
 
+  it("should allow viewers to create an api key", async () => {
+    const viewer = await buildViewer();
+
+    const res = await server.post("/api/apiKeys.create", viewer, {
+      body: {
+        name: "My API Key",
+      },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data.name).toEqual("My API Key");
+  });
+
+  it("should not allow guests to create an api key", async () => {
+    const guest = await buildGuestUser();
+
+    const res = await server.post("/api/apiKeys.create", guest, {
+      body: {
+        name: "My API Key",
+      },
+    });
+
+    expect(res.status).toEqual(403);
+  });
+
   it("should require authentication", async () => {
     const res = await server.post("/api/apiKeys.create");
     expect(res.status).toEqual(401);
   });
+});
+
+describe("#apiKeys.create via ForwardAuth", () => {
+  let originalAuthType: typeof env.AUTH_TYPE;
+
+  const uniqueEmail = () => `${randomString(10).toLowerCase()}@example.com`;
+
+  beforeEach(() => {
+    originalAuthType = env.AUTH_TYPE;
+    env.AUTH_TYPE = AUTH_TYPE_SSO;
+  });
+
+  afterEach(() => {
+    env.AUTH_TYPE = originalAuthType;
+  });
+
+  it("should mint a key from the proxy header alone, as outline-mcp-server does", async () => {
+    const email = uniqueEmail();
+    const user = await buildUser({ email });
+
+    const res = await server.post("/api/apiKeys.create", {
+      headers: { "X-Auth-Request-Email": email },
+      body: { name: "moneta-mcp" },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data.userId).toEqual(user.id);
+    expect(body.data.value).toMatch(/^ol_api_/);
+  });
+
+  it.each([
+    {
+      transport: "Authorization header",
+      request: (victimEmail: string) => ({
+        path: "/api/apiKeys.create",
+        headers: { Authorization: `Bearer fwd:${victimEmail}` },
+        body: { name: "stolen" },
+      }),
+    },
+    {
+      transport: "query string",
+      request: (victimEmail: string) => ({
+        path: `/api/apiKeys.create?token=${encodeURIComponent(`fwd:${victimEmail}`)}`,
+        headers: {},
+        body: { name: "stolen" },
+      }),
+    },
+    {
+      transport: "request body",
+      request: (victimEmail: string) => ({
+        path: "/api/apiKeys.create",
+        headers: {},
+        body: { name: "stolen", token: `fwd:${victimEmail}` },
+      }),
+    },
+  ])(
+    "should not mint a key for a forged fwd: token in the $transport",
+    async ({ request }) => {
+      const attackerEmail = uniqueEmail();
+      const victimEmail = uniqueEmail();
+      const attacker = await buildUser({ email: attackerEmail });
+      const victim = await buildAdmin({
+        teamId: attacker.teamId,
+        email: victimEmail,
+      });
+      const { path, headers, body } = request(victimEmail);
+
+      const res = await server.post(path, {
+        headers: { ...headers, "X-Auth-Request-Email": attackerEmail },
+        body,
+      });
+
+      expect(res.status).toEqual(401);
+      expect(await ApiKey.count({ where: { userId: victim.id } })).toEqual(0);
+    }
+  );
 });
 
 describe("#apiKeys.list", () => {
@@ -85,10 +225,9 @@ describe("#apiKeys.list", () => {
     const admin = await buildAdmin({ teamId: user.teamId });
     await buildApiKey({ userId: user.id });
 
-    const res = await server.post("/api/apiKeys.list", {
+    const res = await server.post("/api/apiKeys.list", admin, {
       body: {
         userId: user.id,
-        token: admin.getJwtToken(),
       },
     });
     const body = await res.json();
@@ -103,10 +242,9 @@ describe("#apiKeys.list", () => {
     await buildApiKey({ userId: user.id });
     await buildApiKey({ userId: admin.id });
 
-    const res = await server.post("/api/apiKeys.list", {
+    const res = await server.post("/api/apiKeys.list", admin, {
       body: {
         userId: admin.id,
-        token: admin.getJwtToken(),
       },
     });
     const body = await res.json();
@@ -122,11 +260,7 @@ describe("#apiKeys.list", () => {
     await buildApiKey({ userId: user.id });
     await buildApiKey();
 
-    const res = await server.post("/api/apiKeys.list", {
-      body: {
-        token: admin.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/apiKeys.list", admin);
 
     const body = await res.json();
 
@@ -140,9 +274,8 @@ describe("#apiKeys.list", () => {
     await buildApiKey({ userId: admin.id, name: "Staging Key" });
     await buildApiKey({ userId: admin.id, name: "Development Token" });
 
-    const res = await server.post("/api/apiKeys.list", {
+    const res = await server.post("/api/apiKeys.list", admin, {
       body: {
-        token: admin.getJwtToken(),
         query: "key",
       },
     });
@@ -162,9 +295,8 @@ describe("#apiKeys.list", () => {
     await buildApiKey({ userId: admin.id, name: "Production Key" });
     await buildApiKey({ userId: admin.id, name: "Staging Key" });
 
-    const res = await server.post("/api/apiKeys.list", {
+    const res = await server.post("/api/apiKeys.list", admin, {
       body: {
-        token: admin.getJwtToken(),
         query: "PRODUCTION",
       },
     });
@@ -179,9 +311,8 @@ describe("#apiKeys.list", () => {
     const admin = await buildAdmin();
     await buildApiKey({ userId: admin.id, name: "Production Key" });
 
-    const res = await server.post("/api/apiKeys.list", {
+    const res = await server.post("/api/apiKeys.list", admin, {
       body: {
-        token: admin.getJwtToken(),
         query: "nonexistent",
       },
     });
@@ -189,6 +320,21 @@ describe("#apiKeys.list", () => {
 
     expect(res.status).toEqual(200);
     expect(body.data.length).toEqual(0);
+  });
+
+  it("should allow viewers to list their own api keys", async () => {
+    const viewer = await buildViewer();
+    await buildApiKey({ userId: viewer.id });
+
+    const res = await server.post("/api/apiKeys.list", viewer, {
+      body: {
+        userId: viewer.id,
+      },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data.length).toEqual(1);
   });
 
   it("should require authentication", async () => {
@@ -205,9 +351,8 @@ describe("#apiKeys.delete", () => {
       userId: user.id,
     });
 
-    const res = await server.post("/api/apiKeys.delete", {
+    const res = await server.post("/api/apiKeys.delete", user, {
       body: {
-        token: user.getJwtToken(),
         id: apiKey.id,
       },
     });
@@ -223,9 +368,8 @@ describe("#apiKeys.delete", () => {
       userId: otherUser.id,
     });
 
-    const res = await server.post("/api/apiKeys.delete", {
+    const res = await server.post("/api/apiKeys.delete", user, {
       body: {
-        token: user.getJwtToken(),
         id: apiKey.id,
       },
     });
@@ -241,9 +385,21 @@ describe("#apiKeys.delete", () => {
       userId: user.id,
     });
 
-    const res = await server.post("/api/apiKeys.delete", {
+    const res = await server.post("/api/apiKeys.delete", admin, {
       body: {
-        token: admin.getJwtToken(),
+        id: apiKey.id,
+      },
+    });
+
+    expect(res.status).toEqual(200);
+  });
+
+  it("should allow viewers to delete their own api key", async () => {
+    const viewer = await buildViewer();
+    const apiKey = await buildApiKey({ userId: viewer.id });
+
+    const res = await server.post("/api/apiKeys.delete", viewer, {
+      body: {
         id: apiKey.id,
       },
     });

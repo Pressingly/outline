@@ -37,7 +37,7 @@ export function InvalidAuthenticationError(
  *
  * Auto-follow semantics make this transparent for GET requests: the
  * browser / fetch re-issues to `redirectTo` with the just-cleared cookie
- * gone, which lands on the ForwardAuth `fwd:` header path and gets a
+ * gone, which lands on the ForwardAuth proxy transport and gets a
  * fresh JWT for the new upstream user. No 401 reaches the frontend.
  */
 export function StaleSessionRedirect(redirectTo: string) {
@@ -133,6 +133,15 @@ export function PaymentRequiredError(message = "Payment required") {
 export function NotFoundError(message = "Resource not found") {
   return httpErrors(404, message, {
     id: "not_found",
+    isReportable: false,
+  });
+}
+
+export function DocumentConflictError(
+  message = "Document has been modified since the provided revision"
+) {
+  return httpErrors(409, message, {
+    id: "document_conflict",
     isReportable: false,
   });
 }
@@ -258,6 +267,15 @@ export function UnprocessableEntityError(
   return httpErrors(422, message, {
     id: "unprocessable_entity",
     isReportable: false,
+  });
+}
+
+export function RequestTimeoutError(
+  message = "Request took too long to complete"
+) {
+  return httpErrors(503, message, {
+    id: "request_timeout",
+    isReportable: true,
   });
 }
 

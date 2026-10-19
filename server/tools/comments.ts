@@ -1,13 +1,14 @@
+import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
-import { Op } from "sequelize";
+import { Op, Transaction } from "sequelize";
 import type { FindOptions, WhereOptions } from "sequelize";
+import { sequelize } from "@server/storage/database";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { CommentStatusFilter } from "@shared/types";
-import { ProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
 import type { CommentMark } from "@shared/utils/ProsemirrorHelper";
 import { commentParser } from "@server/editor";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
+import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import { Comment, Collection, Document } from "@server/models";
 import { authorize } from "@server/policies";
 import { presentComment } from "@server/presenters";
@@ -17,29 +18,31 @@ import {
   success,
   buildAPIContext,
   getActorFromContext,
+  optionalString,
   withTracing,
 } from "./util";
+import { ValidationError } from "@server/errors";
 
 /**
- * Presents a comment with a plain-text rendering of its content so that
+ * Presents a comment with a markdown rendering of its content so that
  * MCP consumers (typically AI agents) can read it without parsing
- * ProseMirror JSON.
+ * ProseMirror JSON, which is omitted from the response.
  *
  * @param comment - the comment model instance.
  * @param commentMarks - optional precomputed comment marks to avoid reparsing.
- * @returns the presented comment with an additional `text` field.
+ * @returns the presented comment with a markdown `text` field.
  */
 function presentCommentWithText(
   comment: Comment,
   commentMarks?: CommentMark[]
 ) {
-  const presented = presentComment(comment, {
+  const { data: _data, ...presented } = presentComment(comment, {
     includeAnchorText: true,
     commentMarks,
   });
   return {
     ...presented,
-    text: comment.toPlainText(),
+    text: comment.toMarkdown(),
   };
 }
 
@@ -63,18 +66,15 @@ export function commentTools(server: McpServer, scopes: string[]) {
           readOnlyHint: true,
         },
         inputSchema: {
-          documentId: z
-            .string()
-            .optional()
-            .describe("The document ID to list comments for."),
-          collectionId: z
-            .string()
-            .optional()
-            .describe("The collection ID to list comments for."),
-          parentCommentId: z
-            .string()
-            .optional()
-            .describe("A parent comment ID to list only its replies."),
+          documentId: optionalString().describe(
+            "The document ID to list comments for."
+          ),
+          collectionId: optionalString().describe(
+            "The collection ID to list comments for."
+          ),
+          parentCommentId: optionalString().describe(
+            "A parent comment ID to list only the replies in that thread."
+          ),
           statusFilter: z
             .array(z.enum(CommentStatusFilter))
             .optional()
@@ -236,44 +236,100 @@ export function commentTools(server: McpServer, scopes: string[]) {
           text: z
             .string()
             .describe("The markdown text content of the comment."),
-          parentCommentId: z
-            .string()
-            .optional()
-            .describe(
-              "The parent comment ID to reply to. Omit for a top-level comment."
-            ),
+          parentCommentId: optionalString().describe(
+            "The parent comment ID to reply to. Omit for a top-level comment."
+          ),
+          anchorText: optionalString().describe(
+            "A plain text substring of the document to anchor this comment to as an inline comment. The first occurrence is used unless anchorPrefix or anchorSuffix is provided, omit for a general document comment."
+          ),
+          anchorPrefix: optionalString().describe(
+            "Only provide this if anchorText appears more than once in the document and you need to target a specific occurrence. Plain text that immediately precedes anchorText."
+          ),
+          anchorSuffix: optionalString().describe(
+            "Only provide this if anchorText appears more than once in the document and you need to target a specific occurrence. Plain text that immediately follows anchorText."
+          ),
         },
       },
       withTracing(
         "create_comment",
-        async ({ documentId, text, parentCommentId }, context) => {
+        async (
+          {
+            documentId,
+            text,
+            parentCommentId,
+            anchorText,
+            anchorPrefix,
+            anchorSuffix,
+          },
+          context
+        ) => {
           try {
             const ctx = buildAPIContext(context);
             const { user } = ctx.state.auth;
 
-            const document = await Document.findByPk(documentId, {
-              userId: user.id,
-            });
-            authorize(user, "comment", document);
-
             const data = commentParser.parse(text).toJSON();
+            const commentId = uuidv4();
 
-            const comment = await Comment.createWithCtx(ctx, {
-              data,
-              createdById: user.id,
-              documentId,
-              parentCommentId,
+            const comment = await sequelize.transaction(async (transaction) => {
+              ctx.state.transaction = transaction;
+              ctx.context.transaction = transaction;
+
+              if (anchorText) {
+                // Acquire the row lock on the document directly when
+                // anchoring so a concurrent comment-mark application can't
+                // overwrite our state update.
+                await Document.unscoped().findOne({
+                  where: { id: documentId },
+                  attributes: ["id"],
+                  transaction,
+                  lock: Transaction.LOCK.UPDATE,
+                });
+              }
+
+              const document = await Document.findByPk(documentId, {
+                userId: user.id,
+                // We only need to load the state binary if applying a comment mark
+                includeState: !!anchorText,
+                transaction,
+              });
+              authorize(user, "comment", document);
+
+              if (anchorText) {
+                const updated = ProsemirrorHelper.applyCommentMarkByText({
+                  docState: DocumentHelper.toState(document),
+                  anchorText,
+                  commentId,
+                  userId: user.id,
+                  prefix: anchorPrefix,
+                  suffix: anchorSuffix,
+                });
+
+                if (!updated) {
+                  throw ValidationError(
+                    "Could not anchor comment to the provided text in the document"
+                  );
+                }
+
+                await document.updateWithCtx(ctx, {
+                  state: updated.state,
+                  content: updated.content,
+                });
+              }
+
+              return Comment.createWithCtx(ctx, {
+                id: commentId,
+                data,
+                createdById: user.id,
+                documentId,
+                parentCommentId,
+              });
             });
 
-            comment.createdBy = user;
-            comment.document = document!;
-
-            const presented = presentCommentWithText(comment);
-            return {
-              content: [
-                { type: "text" as const, text: JSON.stringify(presented) },
-              ],
-            } satisfies CallToolResult;
+            return success({
+              success: true,
+              id: comment.id,
+              documentId: comment.documentId,
+            });
           } catch (err) {
             return error(err);
           }
@@ -290,7 +346,7 @@ export function commentTools(server: McpServer, scopes: string[]) {
         description:
           "Updates an existing comment by its ID. Can update the text content, resolve or unresolve the comment thread, or both. Only top-level comments (not replies) can be resolved or unresolved.",
         annotations: {
-          idempotentHint: true,
+          idempotentHint: false,
           readOnlyHint: false,
         },
         inputSchema: {
@@ -342,15 +398,23 @@ export function commentTools(server: McpServer, scopes: string[]) {
             comment.unresolve();
           }
 
+          // A write that changes nothing must fail loud rather than return a
+          // success the caller would read as a completed write — the request
+          // either carried no recognized fields or text identical to the
+          // current comment.
+          if (!comment.changed()) {
+            return error(
+              "The update resulted in no changes to the comment. Ensure at least one field is provided and differs from the current comment."
+            );
+          }
+
           await comment.saveWithCtx(ctx, status ? { silent: true } : undefined);
 
-          comment.document = document!;
-          const presented = presentCommentWithText(comment);
-          return {
-            content: [
-              { type: "text" as const, text: JSON.stringify(presented) },
-            ],
-          } satisfies CallToolResult;
+          return success({
+            success: true,
+            id: comment.id,
+            documentId: comment.documentId,
+          });
         } catch (err) {
           return error(err);
         }

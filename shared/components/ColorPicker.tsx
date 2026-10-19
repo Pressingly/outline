@@ -1,7 +1,6 @@
 import copy from "copy-to-clipboard";
-import debounce from "lodash/debounce";
 import { CheckmarkIcon, CopyIcon } from "outline-icons";
-import { useMemo, useState, useEffect, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import {
   HexColorInput,
   HexAlphaColorPicker,
@@ -23,9 +22,14 @@ const DEFAULT_COLOR = "#7e3d3db3";
 function ColorPicker({ activeColor, onSelect, alpha }: Props) {
   const [color, setColor] = useState(activeColor || DEFAULT_COLOR);
   const [copied, setCopied] = useState(false);
-  const theme = useTheme();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const theme = useTheme();
+
+  // Keep the internal color in sync when the active color is changed externally
+  useEffect(() => {
+    setColor(activeColor || DEFAULT_COLOR);
+  }, [activeColor]);
 
   const applyColor = useCallback(
     (newColor: string) => {
@@ -40,23 +44,6 @@ function ColorPicker({ activeColor, onSelect, alpha }: Props) {
     },
     [onSelect]
   );
-
-  const debouncedApplyColor = useMemo(
-    () => debounce(applyColor, 250),
-    [applyColor]
-  );
-
-  useEffect(
-    () => () => {
-      debouncedApplyColor.cancel();
-    },
-    [debouncedApplyColor]
-  );
-
-  const handleColorChangePicker = (newColor: string) => {
-    setColor(newColor);
-    debouncedApplyColor(newColor);
-  };
 
   const handleColorChangeInput = (newColor: string) => {
     setColor(newColor);
@@ -75,12 +62,14 @@ function ColorPicker({ activeColor, onSelect, alpha }: Props) {
       {alpha ? (
         <StyledHexAlphaColorPicker
           color={color}
-          onChange={handleColorChangePicker}
+          onChange={setColor}
+          onChangeEnd={applyColor}
         />
       ) : (
         <StyledHexNonAlphaColorPicker
           color={color}
-          onChange={handleColorChangePicker}
+          onChange={setColor}
+          onChangeEnd={applyColor}
         />
       )}
 

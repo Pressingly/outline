@@ -1,5 +1,4 @@
-import compact from "lodash/compact";
-import sortBy from "lodash/sortBy";
+import { compact, sortBy } from "es-toolkit/compat";
 import { observer } from "mobx-react";
 import { useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
@@ -9,6 +8,7 @@ import type User from "~/models/User";
 import { Avatar, AvatarSize } from "~/components/Avatar";
 import ListItem from "~/components/List/Item";
 import PaginatedList from "~/components/PaginatedList";
+import { useComputed } from "~/hooks/useComputed";
 import useCurrentUser from "~/hooks/useCurrentUser";
 import useStores from "~/hooks/useStores";
 
@@ -21,23 +21,26 @@ function DocumentViews({ document }: Props) {
   const { views, presence } = useStores();
   const user = useCurrentUser();
   const locale = dateLocale(user.language);
-  const documentPresence = presence.get(document.id);
-  const documentPresenceArray = documentPresence
-    ? Array.from(documentPresence.values())
-    : [];
-
-  // Use Set for O(1) lookups and stable references
-  const presentIds = useMemo(
-    () => new Set(documentPresenceArray.map((p) => p.userId)),
-    [documentPresenceArray]
-  );
-  const editingIds = useMemo(
-    () =>
-      new Set(
-        documentPresenceArray.filter((p) => p.isEditing).map((p) => p.userId)
-      ),
-    [documentPresenceArray]
-  );
+  // Use Set for O(1) lookups, computed so the identity is only replaced when
+  // the observable presence for the document actually changes.
+  const presentIds = useComputed(() => {
+    const documentPresence = presence.get(document.id);
+    return new Set(
+      documentPresence
+        ? Array.from(documentPresence.values()).map((p) => p.userId)
+        : []
+    );
+  }, [presence, document.id]);
+  const editingIds = useComputed(() => {
+    const documentPresence = presence.get(document.id);
+    return new Set(
+      documentPresence
+        ? Array.from(documentPresence.values())
+            .filter((p) => p.isEditing)
+            .map((p) => p.userId)
+        : []
+    );
+  }, [presence, document.id]);
 
   // ensure currently present via websocket are always ordered first
   const documentViews = useMemo(

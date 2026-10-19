@@ -1,10 +1,11 @@
 import * as React from "react";
 import { toast } from "sonner";
 import styled from "styled-components";
+import { errToString } from "@shared/utils/error";
 import { s, ellipsis } from "@shared/styles";
 import EventBoundary from "@shared/components/EventBoundary";
 
-type Props = Omit<React.HTMLAttributes<HTMLInputElement>, "onSubmit"> & {
+type Props = Omit<React.InputHTMLAttributes<HTMLInputElement>, "onSubmit"> & {
   /** A callback when the title is submitted. */
   onSubmit: (title: string) => Promise<void> | void;
   /** A callback when the editing status changes. */
@@ -109,7 +110,7 @@ function EditableTitle(
         setValue(value);
         setIsEditing(true);
 
-        toast.error(error.message);
+        toast.error(errToString(error));
         throw error;
       } finally {
         setIsSubmitting(false);

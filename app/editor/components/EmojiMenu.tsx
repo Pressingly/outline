@@ -1,4 +1,4 @@
-import capitalize from "lodash/capitalize";
+import { capitalize } from "es-toolkit/compat";
 import { observer } from "mobx-react";
 import { useCallback, useMemo, useEffect } from "react";
 import { emojiMartToGemoji, snakeCase } from "@shared/editor/lib/emoji";
@@ -59,7 +59,9 @@ const EmojiMenu = (props: Props) => {
     [search, emojis.orderedData]
   );
 
-  const renderMenuItem = useCallback(
+  const renderMenuItem = useCallback<
+    SuggestionsMenuProps<Emoji>["renderMenuItem"]
+  >(
     (item, _index, options) => (
       <EmojiMenuItem {...options} title={item.description} emoji={item.emoji} />
     ),

@@ -1,4 +1,4 @@
-import type { Token } from "markdown-it";
+import type Token from "markdown-it/lib/token.mjs";
 import { InputRule } from "prosemirror-inputrules";
 import type {
   Node as ProsemirrorNode,
@@ -10,7 +10,7 @@ import { TextSelection, NodeSelection } from "prosemirror-state";
 import * as React from "react";
 import type { Primitive } from "utility-types";
 import { getEventFiles } from "../../utils/files";
-import { sanitizeUrl } from "../../utils/urls";
+import { sanitizeImageSrc } from "../../utils/urls";
 import { AttachmentValidation } from "../../validations";
 import type { Options } from "../commands/insertFiles";
 import insertFiles from "../commands/insertFiles";
@@ -29,6 +29,11 @@ export default class SimpleImage extends Node {
 
   get name() {
     return "image";
+  }
+
+  /** The component relies on load events to reveal the image, and `toDOM` already emits a plain img. */
+  get allowComponentInStaticHTML() {
+    return false;
   }
 
   get schema(): NodeSpec {
@@ -77,7 +82,7 @@ export default class SimpleImage extends Node {
           "img",
           {
             ...node.attrs,
-            src: sanitizeUrl(node.attrs.src),
+            src: sanitizeImageSrc(node.attrs.src),
             contentEditable: "false",
           },
         ],
@@ -163,6 +168,7 @@ export default class SimpleImage extends Node {
           onFileUploadStart,
           onFileUploadStop,
           onFileUploadProgress,
+          onNotice,
         } = this.editor.props;
 
         if (!uploadFile) {
@@ -184,7 +190,7 @@ export default class SimpleImage extends Node {
             onFileUploadStart,
             onFileUploadStop,
             onFileUploadProgress,
-            dictionary: this.options.dictionary,
+            onNotice,
             replaceExisting: true,
             attrs: {
               width: node.attrs.width,

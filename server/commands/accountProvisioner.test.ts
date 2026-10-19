@@ -1,6 +1,7 @@
 import { faker } from "@faker-js/faker";
 import { randomUUID } from "node:crypto";
-import { TeamDomain } from "@server/models";
+import { errToString } from "@shared/utils/error";
+import { Event, TeamDomain } from "@server/models";
 import Collection from "@server/models/Collection";
 import UserAuthentication from "@server/models/UserAuthentication";
 import { buildUser, buildTeam, buildAdmin } from "@server/test/factories";
@@ -56,6 +57,41 @@ describe("accountProvisioner", () => {
       expect(collectionCount).toEqual(1);
     });
 
+    it("should record the request ip on onboarding events", async () => {
+      const { team } = await accountProvisioner(ctx, {
+        user: {
+          name: "Jenny Tester",
+          email: faker.internet.email(),
+          avatarUrl: faker.image.avatar(),
+        },
+        team: {
+          name: "New workspace",
+          avatarUrl: faker.image.avatar(),
+          subdomain: faker.internet.domainWord(),
+        },
+        authenticationProvider: {
+          name: "google",
+          providerId: faker.internet.domainName(),
+        },
+        authentication: {
+          providerId: randomUUID(),
+          accessToken: "123",
+          scopes: ["read"],
+        },
+      });
+
+      const events = await Event.findAll({
+        where: {
+          teamId: team.id,
+          name: ["collections.create", "documents.create"],
+        },
+      });
+      expect(events.length).toBeGreaterThan(0);
+      events.forEach((event) => {
+        expect(event.ip).toEqual(ip);
+      });
+    });
+
     it("should update existing user and authentication", async () => {
       const existingTeam = await buildTeam();
       const providers = await existingTeam.$get("authenticationProviders");
@@ -70,6 +106,7 @@ describe("accountProvisioner", () => {
         user: {
           name: existing.name,
           email: newEmail,
+          emailVerified: true,
           avatarUrl: existing.avatarUrl,
         },
         team: {
@@ -115,6 +152,7 @@ describe("accountProvisioner", () => {
         user: {
           name: userWithoutAuth.name,
           email,
+          emailVerified: true,
           avatarUrl: userWithoutAuth.avatarUrl,
         },
         team: {
@@ -136,6 +174,56 @@ describe("accountProvisioner", () => {
       expect(user.id).toEqual(userWithoutAuth.id);
       expect(isNewTeam).toEqual(false);
       expect(isNewUser).toEqual(false);
+    });
+
+    it("should not allow authentication by email matching when email is unverified", async () => {
+      const subdomain = faker.internet.domainWord();
+      const existingTeam = await buildTeam({
+        subdomain,
+      });
+
+      const providers = await existingTeam.$get("authenticationProviders");
+      const authenticationProvider = providers[0];
+      const email = faker.internet.email();
+      const userWithoutAuth = await buildUser({
+        email,
+        teamId: existingTeam.id,
+        authentications: [],
+      });
+
+      let error;
+      try {
+        await accountProvisioner(ctx, {
+          user: {
+            name: userWithoutAuth.name,
+            email,
+            emailVerified: false,
+            avatarUrl: userWithoutAuth.avatarUrl,
+          },
+          team: {
+            teamId: existingTeam.id,
+            name: existingTeam.name,
+            avatarUrl: existingTeam.avatarUrl,
+            subdomain,
+          },
+          authenticationProvider: {
+            name: authenticationProvider.name,
+            providerId: authenticationProvider.providerId,
+          },
+          authentication: {
+            providerId: randomUUID(),
+            accessToken: "123",
+            scopes: ["read"],
+          },
+        });
+      } catch (err) {
+        error = err;
+      }
+
+      expect(error).toBeTruthy();
+      expect(
+        error instanceof Error && "id" in error ? error.id : undefined
+      ).toEqual("invalid_authentication");
     });
 
     it("should throw an error when authentication provider is disabled", async () => {
@@ -250,6 +338,7 @@ describe("accountProvisioner", () => {
           user: {
             name: "Jenny Tester",
             email,
+            emailVerified: true,
             avatarUrl: faker.image.avatar(),
           },
           team: {
@@ -291,6 +380,7 @@ describe("accountProvisioner", () => {
         user: {
           name: "Jenny Tester",
           email,
+          emailVerified: true,
           avatarUrl: faker.image.avatar(),
         },
         team: {
@@ -482,7 +572,7 @@ describe("accountProvisioner", () => {
         error = err;
       }
 
-      expect(error.message).toEqual("Invalid authentication");
+      expect(errToString(error)).toEqual("Invalid authentication");
     });
 
     it("should always use existing team if self-hosted", async () => {

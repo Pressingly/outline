@@ -26,8 +26,8 @@ export const SearchInput = React.forwardRef(function SearchInput_(
   const isMobile = useMobile();
 
   const focusInput = React.useCallback(
-    (event) => {
-      if (event.target.closest("button")) {
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (event.target instanceof Element && event.target.closest("button")) {
         return;
       }
       inputRef.current?.focus();
@@ -60,6 +60,7 @@ export const SearchInput = React.forwardRef(function SearchInput_(
         <NativeInput
           key="input"
           ref={mergeRefs([inputRef, ref])}
+          aria-label={`${t("Add or invite")}…`}
           placeholder={`${t("Add or invite")}…`}
           value={query}
           onChange={onChange}

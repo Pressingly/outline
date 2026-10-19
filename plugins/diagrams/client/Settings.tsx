@@ -1,9 +1,10 @@
-import find from "lodash/find";
+import { find } from "es-toolkit/compat";
 import { observer } from "mobx-react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { useTranslation, Trans } from "react-i18next";
 import { toast } from "sonner";
+import { errToString } from "@shared/utils/error";
 import { IntegrationType, IntegrationService } from "@shared/types";
 import type Integration from "~/models/Integration";
 import { IntegrationScene } from "~/scenes/Settings/components/IntegrationScene";
@@ -16,7 +17,7 @@ import useStores from "~/hooks/useStores";
 import Icon from "./Icon";
 import Flex from "~/components/Flex";
 import styled from "styled-components";
-import { disconnectIntegrationFactory } from "~/actions/definitions/integrations";
+import { disconnectIntegrationActionFactory } from "~/actions/definitions/integrations";
 
 type FormData = {
   url: string;
@@ -67,7 +68,7 @@ function DiagramsNet() {
 
         toast.success(t("Settings saved"));
       } catch (err) {
-        toast.error(err.message);
+        toast.error(errToString(err));
       }
     },
     [integrations, integration, t]
@@ -109,7 +110,7 @@ function DiagramsNet() {
           </StyledSubmit>
 
           <Button
-            action={disconnectIntegrationFactory(integration)}
+            action={disconnectIntegrationActionFactory(integration)}
             disabled={formState.isSubmitting}
             neutral
             hideIcon

@@ -1,5 +1,6 @@
-import isUndefined from "lodash/isUndefined";
+import { isUndefined } from "es-toolkit/compat";
 import { z } from "zod";
+import { createFilterSchema } from "@shared/helpers/FilterHelper";
 import {
   CollectionPermission,
   CollectionStatusFilter,
@@ -15,42 +16,64 @@ const BaseIdSchema = z.object({
   id: zodIdType(),
 });
 
+/** The landing page can be set from description (markdown) or data (rich content), but not both. */
+const refineBodyContent = <T extends { description?: unknown; data?: unknown }>(
+  body: T
+) => isUndefined(body.description) || isUndefined(body.data);
+
+const bodyContentError = {
+  error: "Only one of description or data may be provided",
+};
+
 export const CollectionsCreateSchema = BaseSchema.extend({
-  body: z.object({
-    name: z.string(),
-    color: z
-      .string()
-      .regex(ValidateColor.regex, { message: ValidateColor.message })
-      .nullish(),
-    description: z.string().nullish(),
-    data: ProsemirrorSchema({ allowEmpty: true }).nullish(),
-    permission: z
-      .enum(CollectionPermission)
-      .nullish()
-      .transform((val) => (isUndefined(val) ? null : val)),
-    sharing: z.boolean().prefault(true),
-    icon: zodIconType().optional(),
-    sort: z
-      .object({
-        field: z.union([z.literal("title"), z.literal("index")]),
-        direction: z.union([z.literal("asc"), z.literal("desc")]),
-      })
-      .prefault(Collection.DEFAULT_SORT),
-    index: z
-      .string()
-      .regex(ValidateIndex.regex, { message: ValidateIndex.message })
-      .max(ValidateIndex.maxLength, {
-        message: `Must be ${ValidateIndex.maxLength} or fewer characters long`,
-      })
-      .optional(),
-    commenting: z.boolean().nullish(),
-    templateManagement: z
-      .enum([CollectionPermission.Admin, CollectionPermission.ReadWrite])
-      .prefault(CollectionPermission.Admin),
-  }),
+  body: z
+    .object({
+      name: z.string(),
+      color: z
+        .string()
+        .regex(ValidateColor.regex, { message: ValidateColor.message })
+        .nullish(),
+      description: z.string().nullish(),
+      data: ProsemirrorSchema({ allowEmpty: true }).nullish(),
+      permission: z
+        .enum(CollectionPermission)
+        .nullish()
+        .transform((val) => (isUndefined(val) ? null : val)),
+      sharing: z.boolean().prefault(true),
+      icon: zodIconType().optional(),
+      sort: z
+        .object({
+          field: z.union([z.literal("title"), z.literal("index")]),
+          direction: z.union([z.literal("asc"), z.literal("desc")]),
+        })
+        .prefault(Collection.DEFAULT_SORT),
+      index: z
+        .string()
+        .regex(ValidateIndex.regex, { message: ValidateIndex.message })
+        .max(ValidateIndex.maxLength, {
+          message: `Must be ${ValidateIndex.maxLength} or fewer characters long`,
+        })
+        .optional(),
+      commenting: z.boolean().nullish(),
+      templateManagement: z
+        .enum([CollectionPermission.Admin, CollectionPermission.ReadWrite])
+        .prefault(CollectionPermission.Admin),
+    })
+    .refine(refineBodyContent, bodyContentError),
 });
 
 export type CollectionsCreateReq = z.infer<typeof CollectionsCreateSchema>;
+
+export const CollectionsDuplicateSchema = BaseSchema.extend({
+  body: BaseIdSchema.extend({
+    /** New collection name */
+    name: z.string().optional(),
+  }),
+});
+
+export type CollectionsDuplicateReq = z.infer<
+  typeof CollectionsDuplicateSchema
+>;
 
 export const CollectionsInfoSchema = BaseSchema.extend({
   body: BaseIdSchema.extend({
@@ -76,9 +99,15 @@ export const CollectionsImportSchema = BaseSchema.extend({
       .nullish()
       .transform((val) => (isUndefined(val) ? null : val)),
     attachmentId: z.uuid(),
+    /**
+     * The format of the upload. Both `json` and `outline-markdown` are
+     * routed through the API-import pipeline (see `imports.create`); the
+     * `format` field is retained for backwards compatibility with API
+     * clients calling this endpoint directly.
+     */
     format: z
-      .enum(FileOperationFormat)
-      .prefault(FileOperationFormat.MarkdownZip),
+      .enum([FileOperationFormat.JSON, FileOperationFormat.MarkdownZip])
+      .prefault(FileOperationFormat.JSON),
   }),
 });
 
@@ -182,21 +211,52 @@ export const CollectionsUpdateSchema = BaseSchema.extend({
     templateManagement: z
       .enum([CollectionPermission.Admin, CollectionPermission.ReadWrite])
       .optional(),
-  }),
+  }).refine(refineBodyContent, bodyContentError),
 });
 
 export type CollectionsUpdateReq = z.infer<typeof CollectionsUpdateSchema>;
+
+const collectionListFilter = createFilterSchema({
+  name: "string",
+  createdAt: "date",
+  updatedAt: "date",
+  archivedAt: "date",
+  createdById: "uuid",
+  permission: {
+    kind: "string",
+    operators: ["eq", "neq", "in", "notIn", "isNull", "isNotNull"],
+    values: Object.values(CollectionPermission),
+  },
+} as const);
 
 export const CollectionsListSchema = BaseSchema.extend({
   body: z.object({
     includeListOnly: z.boolean().prefault(false),
 
+    /**
+     * Filter results by collection name.
+     * @deprecated use `filters` with field `name` and operator `contains` instead.
+     */
     query: z.string().optional(),
 
-    /** Collection statuses to include in results */
+    /**
+     * Collection statuses to include in results.
+     * @deprecated use `filters` with field `archivedAt` instead.
+     */
     statusFilter: z.enum(CollectionStatusFilter).array().optional(),
+
+    /** List of filter expressions. Implicit AND between top-level entries. */
+    filters: collectionListFilter.FilterListSchema.optional(),
   }),
-});
+}).refine(
+  (req) =>
+    req.body.filters === undefined ||
+    (req.body.query === undefined && req.body.statusFilter === undefined),
+  {
+    message:
+      "filters cannot be combined with deprecated parameters query or statusFilter",
+  }
+);
 
 export type CollectionsListReq = z.infer<typeof CollectionsListSchema>;
 

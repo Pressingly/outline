@@ -28,6 +28,11 @@ export type NotificationFilter =
 class Notification extends Model {
   static modelName = "Notification";
 
+  constructor(fields: Record<string, unknown>, store: Model["store"]) {
+    super(fields, store);
+    this.initialize(fields);
+  }
+
   static filterCategories: Record<NotificationFilter, NotificationEventType[]> =
     {
       all: [],
@@ -48,6 +53,7 @@ class Notification extends Model {
         NotificationEventType.UpdateDocument,
         NotificationEventType.CreateRevision,
         NotificationEventType.AddUserToDocument,
+        NotificationEventType.RequestDocumentAccess,
       ],
       collections: [
         NotificationEventType.CreateCollection,
@@ -75,6 +81,18 @@ class Notification extends Model {
   @observable
   archivedAt: Date | null;
 
+  /**
+   * Request ID on notifications for access requests.
+   */
+  @Field
+  @observable
+  accessRequestId?: string = undefined;
+  /**
+   * Status of the associated access request.
+   */
+  @Field
+  @observable
+  accessRequestStatus?: string = undefined;
   /**
    * The user that triggered the notification.
    */
@@ -195,6 +213,14 @@ class Notification extends Model {
         return t("shared");
       case NotificationEventType.AddUserToCollection:
         return t("invited you to");
+      case NotificationEventType.RequestDocumentAccess:
+        if (this.accessRequestStatus === "approved") {
+          return t("was granted access to");
+        }
+        if (this.accessRequestStatus === "dismissed") {
+          return t("requested access to");
+        }
+        return t("is requesting access to");
       default:
         return this.event;
     }
@@ -237,6 +263,7 @@ class Notification extends Model {
           : undefined;
         return collection ? collectionPath(collection) : "";
       }
+      case NotificationEventType.RequestDocumentAccess:
       case NotificationEventType.AddUserToDocument:
       case NotificationEventType.GroupMentionedInDocument:
       case NotificationEventType.MentionedInDocument: {
@@ -252,7 +279,7 @@ class Notification extends Model {
           : this.document?.path;
       }
       case NotificationEventType.InviteAccepted: {
-        return settingsPath("members");
+        return settingsPath("users");
       }
       case NotificationEventType.Onboarding:
       case NotificationEventType.Features: {

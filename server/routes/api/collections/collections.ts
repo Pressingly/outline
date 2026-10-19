@@ -1,16 +1,21 @@
 import Router from "koa-router";
+import { randomUUID } from "node:crypto";
+import { truncate } from "es-toolkit/compat";
 import type { WhereOptions } from "sequelize";
 import { Sequelize, Op } from "sequelize";
+import type { Filter } from "@shared/helpers/FilterHelper";
 import {
   CollectionPermission,
   CollectionStatusFilter,
-  FileOperationState,
-  FileOperationType,
+  FileOperationFormat,
+  ImportState,
+  IntegrationService,
   UserRole,
 } from "@shared/types";
+import { ImportValidation } from "@shared/validations";
+import collectionDuplicator from "@server/commands/collectionDuplicator";
 import collectionExporter from "@server/commands/collectionExporter";
 import teamUpdater from "@server/commands/teamUpdater";
-import { parser } from "@server/editor";
 import auth from "@server/middlewares/authentication";
 import { rateLimiter } from "@server/middlewares/rateLimiter";
 import { transaction } from "@server/middlewares/transaction";
@@ -23,10 +28,14 @@ import {
   User,
   Group,
   Attachment,
-  FileOperation,
   Document,
+  Import,
 } from "@server/models";
-import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
+import {
+  buildWhere,
+  combineFilters,
+  hasFieldInFilter,
+} from "@server/models/helpers/Filters";
 import { authorize } from "@server/policies";
 import {
   presentCollection,
@@ -40,6 +49,7 @@ import {
 import type { APIContext } from "@server/types";
 import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import { collectionIndexing } from "@server/utils/indexing";
+import { QueryHelper } from "@server/storage/QueryHelper";
 import pagination from "../middlewares/pagination";
 import * as T from "./schema";
 import { InvalidRequestError } from "@server/errors";
@@ -87,12 +97,6 @@ router.post(
       templateManagement,
     });
 
-    if (data) {
-      collection.description = await DocumentHelper.toMarkdown(collection, {
-        includeTitle: false,
-      });
-    }
-
     await collection.saveWithCtx(ctx);
 
     // we must reload the collection to get memberships for policy presenter
@@ -105,6 +109,36 @@ router.post(
     ctx.body = {
       data: await presentCollection(ctx, reloaded),
       policies: presentPolicies(user, [reloaded]),
+    };
+  }
+);
+
+router.post(
+  "collections.duplicate",
+  rateLimiter(RateLimiterStrategy.TwentyFivePerMinute),
+  auth(),
+  validate(T.CollectionsDuplicateSchema),
+  transaction(),
+  async (ctx: APIContext<T.CollectionsDuplicateReq>) => {
+    const { transaction } = ctx.state;
+    const { id, name } = ctx.input.body;
+    const { user } = ctx.state.auth;
+
+    const collection = await Collection.findByPk(id, {
+      userId: user.id,
+      transaction,
+      rejectOnEmpty: true,
+    });
+    authorize(user, "duplicate", collection);
+
+    const duplicated = await collectionDuplicator(ctx, {
+      collection,
+      name,
+    });
+
+    ctx.body = {
+      data: await presentCollection(ctx, duplicated),
+      policies: presentPolicies(user, [duplicated]),
     };
   }
 );
@@ -169,17 +203,27 @@ router.post(
     });
     authorize(user, "read", attachment);
 
-    await FileOperation.createWithCtx(ctx, {
-      type: FileOperationType.Import,
-      state: FileOperationState.Creating,
-      format,
-      size: attachment.size,
-      key: attachment.key,
-      userId: user.id,
+    const service =
+      format === FileOperationFormat.MarkdownZip
+        ? IntegrationService.Markdown
+        : IntegrationService.JSON;
+
+    await Import.createWithCtx(ctx, {
+      name: truncate(attachment.name, {
+        length: ImportValidation.maxNameLength,
+      }),
+      service,
+      state: ImportState.Created,
+      input: [
+        {
+          externalId: randomUUID(),
+          permission: permission ?? undefined,
+        },
+      ],
+      scratch: { storageKey: attachment.key },
+      integrationId: null,
+      createdById: user.id,
       teamId: user.teamId,
-      options: {
-        permission,
-      },
     });
 
     ctx.body = {
@@ -301,9 +345,7 @@ router.post(
 
     if (query) {
       groupWhere = {
-        name: {
-          [Op.iLike]: `%${query}%`,
-        },
+        name: { [Op.iLike]: QueryHelper.likeContains(query) },
       };
     }
 
@@ -452,9 +494,7 @@ router.post(
 
     if (query) {
       userWhere = {
-        name: {
-          [Op.iLike]: `%${query}%`,
-        },
+        name: { [Op.iLike]: QueryHelper.likeContains(query) },
       };
     }
 
@@ -628,16 +668,10 @@ router.post(
 
     if (description !== undefined) {
       collection.description = description;
-      collection.content = description
-        ? parser.parse(description)?.toJSON()
-        : null;
     }
 
     if (data !== undefined) {
       collection.content = data;
-      collection.description = await DocumentHelper.toMarkdown(collection, {
-        includeTitle: false,
-      });
     }
 
     if (icon !== undefined) {
@@ -707,7 +741,12 @@ router.post(
   pagination(),
   transaction(),
   async (ctx: APIContext<T.CollectionsListReq>) => {
-    const { includeListOnly, query, statusFilter } = ctx.input.body;
+    const {
+      includeListOnly,
+      query,
+      statusFilter,
+      filters: rawFilters,
+    } = ctx.input.body;
     const { user } = ctx.state.auth;
     const { transaction } = ctx.state;
     const collectionIds = await user.collectionIds({ transaction });
@@ -725,40 +764,40 @@ router.post(
       ],
     };
 
-    if (!statusFilter) {
+    // The schema rejects callers that combine `filters` with the deprecated
+    // top-level params, so at most one of the two shapes is set.
+    const legacyLeaves: Filter[] = [];
+    if (query) {
+      legacyLeaves.push({ field: "name", operator: "contains", value: query });
+    }
+    if (statusFilter?.includes(CollectionStatusFilter.Archived)) {
+      legacyLeaves.push({ field: "archivedAt", operator: "isNotNull" });
+    }
+    const filter = combineFilters(rawFilters ?? legacyLeaves);
+
+    // Results can contain archived collections once the caller targets
+    // archivedAt themselves, so hydrate the archiving user for presentation.
+    const includeArchived =
+      filter !== undefined && hasFieldInFilter(filter, "archivedAt");
+
+    // Exclude archived collections unless the caller targets archivedAt.
+    if (statusFilter === undefined && !includeArchived) {
       where[Op.and].push({ archivedAt: { [Op.eq]: null } });
     }
 
-    if (!includeListOnly || !user.isAdmin) {
+    // Admins can restore any archived collection, including private ones they
+    // are not a member of, so they must be able to see them listed.
+    if (!user.isAdmin || !(includeListOnly || includeArchived)) {
       where[Op.and].push({ id: collectionIds });
     }
 
-    if (query) {
-      where[Op.and].push(
-        Sequelize.literal(`unaccent(LOWER(name)) like unaccent(LOWER(:query))`)
-      );
+    if (filter) {
+      where[Op.and].push(buildWhere<Collection>(filter));
     }
-
-    const statusQuery = [];
-    if (statusFilter?.includes(CollectionStatusFilter.Archived)) {
-      statusQuery.push({
-        archivedAt: {
-          [Op.ne]: null,
-        },
-      });
-    }
-
-    if (statusQuery.length) {
-      where[Op.and].push({
-        [Op.or]: statusQuery,
-      });
-    }
-
-    const replacements = { query: `%${query}%` };
 
     const [collections, total] = await Promise.all([
       Collection.scope(
-        statusFilter?.includes(CollectionStatusFilter.Archived)
+        includeArchived
           ? [
               {
                 method: ["withMembership", user.id],
@@ -770,7 +809,6 @@ router.post(
             }
       ).findAll({
         where,
-        replacements,
         order: [
           Sequelize.literal('"collection"."index" collate "C"'),
           ["updatedAt", "DESC"],
@@ -781,8 +819,6 @@ router.post(
       }),
       Collection.count({
         where,
-        // @ts-expect-error Types are incorrect for count
-        replacements,
         transaction,
       }),
     ]);
@@ -921,7 +957,7 @@ router.post(
 
     let collection = await Collection.findByPk(id, {
       transaction,
-      lock: transaction.LOCK.UPDATE,
+      lock: transaction.LOCK.NO_KEY_UPDATE,
     });
     authorize(user, "move", collection);
 

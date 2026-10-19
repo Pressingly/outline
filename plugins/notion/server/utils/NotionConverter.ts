@@ -32,7 +32,7 @@ import type {
   SyncedBlockBlockObjectResponse,
   LinkToPageBlockObjectResponse,
 } from "@notionhq/client/build/src/api-endpoints";
-import isArray from "lodash/isArray";
+import { isArray } from "es-toolkit/compat";
 import { NoticeTypes } from "@shared/editor/nodes/Notice";
 import type { ProsemirrorData, ProsemirrorDoc } from "@shared/types";
 import { MentionType } from "@shared/types";
@@ -586,7 +586,7 @@ export class NotionConverter {
 
   private static table(
     item: TableBlockObjectResponse & {
-      children: Array<{
+      children?: Array<{
         table_row: {
           cells: Array<Array<RichTextItemResponse>>;
         };
@@ -595,6 +595,11 @@ export class NotionConverter {
       }>;
     }
   ) {
+    // A table with no rows is invalid content, skip it entirely.
+    if (!item.children?.length) {
+      return undefined;
+    }
+
     return {
       type: "table",
       content: item.children.map((tr, y) => ({

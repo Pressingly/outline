@@ -3,6 +3,7 @@ import { Hour } from "@shared/utils/time";
 import { traceFunction } from "@server/logging/tracing";
 import type { Document } from "@server/models";
 import FileOperation from "@server/models/FileOperation";
+import User from "@server/models/User";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import type { APIContext } from "@server/types";
 import presentUser from "./user";
@@ -18,6 +19,9 @@ type Options = {
   includeData?: boolean;
   /** Include the updatedAt timestamp for public documents. */
   includeUpdatedAt?: boolean;
+  /** Include the unresolved comment count. Each call triggers a Redis lookup
+   * so only enable when the consumer needs the signal (e.g. MCP). */
+  includeCommentCount?: boolean;
   /** Array of backlink document IDs to include in the response. */
   backlinkIds?: string[];
 };
@@ -77,9 +81,11 @@ async function presentDocument(
     publishedAt: document.publishedAt,
     archivedAt: document.archivedAt,
     deletedAt: document.deletedAt,
+    deletedBy: undefined,
     collaboratorIds: [],
     revision: document.revisionCount,
     fullWidth: document.fullWidth,
+    preferences: document.preferences,
     collectionId: undefined,
     parentDocumentId: undefined,
     lastViewedAt: undefined,
@@ -100,27 +106,37 @@ async function presentDocument(
   }
 
   if (!options.isPublic) {
-    const source = document.import ?? (await document.$get("import"));
-
     res.tasks = document.tasks;
     res.isCollectionDeleted = await document.isCollectionDeleted();
     res.collectionId = document.collectionId;
     res.parentDocumentId = document.parentDocumentId;
     res.createdBy = presentUser(document.createdBy);
     res.updatedBy = presentUser(document.updatedBy);
-    res.collaboratorIds = document.collaboratorIds;
+    res.collaboratorIds = document.collaboratorIds ?? [];
     res.templateId = document.templateId;
     res.insightsEnabled = document.insightsEnabled;
     res.popularityScore = document.popularityScore;
-    res.sourceMetadata = document.sourceMetadata
-      ? {
-          importedAt: source?.createdAt ?? document.createdAt,
-          importType: source?.format,
-          createdByName: document.sourceMetadata.createdByName,
-          fileName: document.sourceMetadata?.fileName,
-          originalDocumentId: document.sourceMetadata?.originalDocumentId,
-        }
-      : undefined;
+    if (document.deletedById) {
+      const deletedBy =
+        document.deletedBy ??
+        (await document.$get("deletedBy", { paranoid: false }));
+      if (deletedBy) {
+        res.deletedBy = presentUser(deletedBy);
+      }
+    }
+    if (options.includeCommentCount) {
+      res.commentCount = await document.commentCount;
+    }
+    if (document.sourceMetadata) {
+      const source = document.import ?? (await document.$get("import"));
+      res.sourceMetadata = {
+        importedAt: source?.createdAt ?? document.createdAt,
+        importType: source?.format,
+        createdByName: document.sourceMetadata.createdByName,
+        fileName: document.sourceMetadata?.fileName,
+        originalDocumentId: document.sourceMetadata?.originalDocumentId,
+      };
+    }
   }
 
   return res;
@@ -131,8 +147,8 @@ export default traceFunction({
 })(presentDocument);
 
 /**
- * Batch-present multiple documents, fetching all related FileOperation records
- * in a single query instead of one per document.
+ * Batch-present multiple documents, fetching all related FileOperation and
+ * deleting User records in a single query instead of one per document.
  *
  * @param ctx the API context.
  * @param documents the documents to present.
@@ -160,6 +176,29 @@ export async function presentDocuments(
       for (const doc of documents) {
         if (doc.importId) {
           doc.import = sourceMap.get(doc.importId) ?? null;
+        }
+      }
+    }
+
+    // Deduplicated because a page of trashed documents is often the work of a
+    // single person, and only for documents that arrived without the
+    // association so that an eager loaded one is not overwritten.
+    const deletedByIds = new Set(
+      documents
+        .filter((doc) => doc.deletedById && !doc.deletedBy)
+        .map((doc) => doc.deletedById!)
+    );
+
+    if (deletedByIds.size > 0) {
+      const users = await User.unscoped().findAll({
+        where: { id: { [Op.in]: Array.from(deletedByIds) } },
+        paranoid: false,
+      });
+      const userMap = new Map(users.map((user) => [user.id, user]));
+
+      for (const doc of documents) {
+        if (doc.deletedById && !doc.deletedBy) {
+          doc.deletedBy = userMap.get(doc.deletedById) ?? null;
         }
       }
     }

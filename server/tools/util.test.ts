@@ -5,7 +5,12 @@ import {
   buildTeam,
   buildUser,
 } from "@server/test/factories";
-import { buildBreadcrumb, getBreadcrumbsForDocuments } from "./util";
+import {
+  buildBreadcrumb,
+  getBreadcrumbsForDocuments,
+  optionalString,
+  success,
+} from "./util";
 
 const node = (
   id: string,
@@ -16,6 +21,29 @@ const node = (
   title,
   url: `/doc/${id}`,
   children,
+});
+
+describe("success", () => {
+  it("returns a text block for empty list results", () => {
+    expect(success([])).toEqual({
+      content: [{ type: "text", text: "[]" }],
+    });
+  });
+
+  it("returns one text block per list item", () => {
+    expect(success([{ id: "a" }, { id: "b" }])).toEqual({
+      content: [
+        { type: "text", text: JSON.stringify({ id: "a" }) },
+        { type: "text", text: JSON.stringify({ id: "b" }) },
+      ],
+    });
+  });
+
+  it("wraps a single object in one text block", () => {
+    expect(success({ success: true })).toEqual({
+      content: [{ type: "text", text: JSON.stringify({ success: true }) }],
+    });
+  });
 });
 
 describe("buildBreadcrumb", () => {
@@ -59,6 +87,26 @@ describe("buildBreadcrumb", () => {
 
   it("returns just the collection name when the structure is empty", () => {
     expect(buildBreadcrumb("a", [], "Engineering")).toBe("Engineering");
+  });
+});
+
+describe("optionalString", () => {
+  const schema = optionalString();
+
+  it("returns undefined when input is omitted", () => {
+    expect(schema.parse(undefined)).toBeUndefined();
+  });
+
+  it("coerces an empty string to undefined", () => {
+    expect(schema.parse("")).toBeUndefined();
+  });
+
+  it("passes through a non-empty string", () => {
+    expect(schema.parse("hello")).toBe("hello");
+  });
+
+  it("preserves whitespace-only strings", () => {
+    expect(schema.parse(" ")).toBe(" ");
   });
 });
 
@@ -133,6 +181,22 @@ describe("getBreadcrumbsForDocuments", () => {
       user
     );
     expect(result.has("doc-without-collection")).toBe(false);
+  });
+
+  it("falls back to the collection name for a document missing from the structure", async () => {
+    const team = await buildTeam();
+    const user = await buildUser({ teamId: team.id });
+    const collection = await buildCollection({
+      teamId: team.id,
+      permission: CollectionPermission.ReadWrite,
+      name: "Engineering",
+    });
+
+    const result = await getBreadcrumbsForDocuments(
+      [{ id: "not-in-structure", collectionId: collection.id }],
+      user
+    );
+    expect(result.get("not-in-structure")).toBe("Engineering");
   });
 
   it("resolves breadcrumbs across multiple collections in one call", async () => {

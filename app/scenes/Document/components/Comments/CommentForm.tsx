@@ -8,6 +8,7 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useTheme } from "styled-components";
+import { parseReactionShorthand } from "@shared/editor/lib/emoji";
 import type { ProsemirrorData } from "@shared/types";
 import { getEventFiles } from "@shared/utils/files";
 import { AttachmentValidation, CommentValidation } from "@shared/validations";
@@ -57,6 +58,12 @@ type Props = {
   onBlur?: () => void;
   /** Callback when user presses up arrow at the start of the editor */
   onUpArrowAtStart?: () => void;
+  /**
+   * Callback invoked when a new top-level comment is about to be created,
+   * just before it is added to the store. Receives the comment model, which
+   * may be modified, e.g. to set a pending anchor before submission.
+   */
+  onBeforeCreate?: (comment: Comment) => void;
 };
 
 function CommentForm({
@@ -68,6 +75,7 @@ function CommentForm({
   onFocus,
   onBlur,
   onUpArrowAtStart,
+  onBeforeCreate,
   autoFocus,
   standalone,
   placeholder,
@@ -129,7 +137,11 @@ function CommentForm({
       .save({
         documentId,
         data: draft,
+        ...thread?.pendingAnchor,
       })
+      // Note: pendingAnchor is intentionally kept after saving — it continues
+      // to provide the highlighted snippet until the server-applied mark
+      // arrives through the collaboration sync.
       .then(() => onSubmit?.())
       .catch(() => {
         onSaveDraft(commentDraft);
@@ -139,7 +151,12 @@ function CommentForm({
         toast.error(t("Error creating comment"));
       });
 
-    // optimistically update the comment model
+    // optimistically update the comment model. Setting the data here, rather
+    // than waiting for save() to resolve, avoids a frame where the rendered
+    // comment is empty before the saved data is applied.
+    if (draft) {
+      comment.data = draft;
+    }
     comment.isNew = false;
     comment.createdById = user.id;
     comment.createdBy = user;
@@ -149,6 +166,30 @@ function CommentForm({
     event.preventDefault();
     if (!draft) {
       return;
+    }
+
+    // "+:emoji:" shorthand: react to the comment above instead of replying.
+    if (thread && !thread.isNew) {
+      const emoji = parseReactionShorthand(draft);
+      if (emoji) {
+        const target = comments
+          .inThread(thread.id)
+          .filter((comment) => !comment.isNew)
+          .pop();
+
+        if (target) {
+          onSaveDraft(undefined);
+          setForceRender((s) => ++s);
+          void target.addReaction({ emoji, user });
+          onSubmit?.();
+
+          // re-focus the comment editor
+          setTimeout(() => {
+            editorRef.current?.focusAtStart();
+          }, 0);
+          return;
+        }
+      }
     }
 
     const commentDraft = draft;
@@ -167,10 +208,18 @@ function CommentForm({
     );
 
     comment.id = uuidv4();
+    if (!thread) {
+      onBeforeCreate?.(comment);
+    }
     comments.add(comment);
 
     comment
-      .save()
+      .save({
+        documentId,
+        parentCommentId: thread?.id,
+        data: draft,
+        ...comment.pendingAnchor,
+      })
       .then(() => onSubmit?.())
       .catch(() => {
         onSaveDraft(commentDraft);
@@ -254,7 +303,7 @@ function CommentForm({
 
   // Focus the editor when it's a new comment just mounted
   const handleMounted = React.useCallback(
-    (ref) => {
+    (ref: SharedEditor | null) => {
       if (autoFocus && ref && !hasFocusedOnMount.current) {
         if (!draft) {
           ref.focusAtStart();
@@ -269,20 +318,23 @@ function CommentForm({
     ? {
         initial: {
           opacity: 0,
-          marginBottom: -100,
+          y: 10,
         },
         animate: {
           opacity: 1,
-          marginBottom: 0,
+          y: 0,
           transition: {
-            type: "spring",
-            bounce: 0.1,
+            duration: 0.2,
+            ease: "easeOut",
           },
         },
         exit: {
           opacity: 0,
-          marginBottom: -100,
-          scale: 0.98,
+          y: 10,
+          transition: {
+            duration: 0.2,
+            ease: "easeOut",
+          },
         },
       }
     : {};
@@ -304,7 +356,18 @@ function CommentForm({
         />
       </VisuallyHidden.Root>
       <Flex gap={8} align="flex-start">
-        <Avatar model={user} size={24} style={{ marginTop: 8 }} />
+        {standalone ? (
+          <m.div
+            style={{ marginTop: 8 }}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, ease: "easeOut" }}
+          >
+            <Avatar model={user} size={24} />
+          </m.div>
+        ) : (
+          <Avatar model={user} size={24} style={{ marginTop: 8 }} />
+        )}
         <Bubble
           gap={10}
           onClick={handleClickPadding}
