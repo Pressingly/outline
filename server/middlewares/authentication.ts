@@ -121,7 +121,7 @@ export default function auth(options: AuthenticationOptions = {}) {
         // Stale-session redirect. Convert into a 302 with Location pointing
         // to /home and expire the stale session cookies. Browser / fetch
         // auto-follow the redirect with the cleared cookies, which lands on
-        // the ForwardAuth `fwd:` header path and issues a fresh JWT, so no
+        // the ForwardAuth proxy transport and issues a fresh JWT, so no
         // 401 surfaces to the SPA.
         //
         // err.headers is the only way to carry Set-Cookie + Location through
@@ -266,7 +266,7 @@ export function parseAuthentication(ctx: AppContext): AuthInput {
  *   `<local>@${env.DEFAULT_EMAIL_DOMAIN}` so the resulting key is the same
  *   one the User row was created under.
  *
- * Kept in sync with the synthesis logic in the `fwd:` branch of
+ * Kept in sync with the synthesis logic in the proxy-transport branch of
  * `validateAuthentication` and reused by the stale-session mismatch check.
  */
 function normalizeProxyEmail(raw: string): string {
@@ -477,8 +477,8 @@ async function validateAuthentication(
 
     // Concurrent-creation race guard. The SPA on first-ever login fires
     // multiple parallel API requests (docs, team, access tokens, …) with
-    // no accessToken cookie set yet — so every request takes the `fwd:`
-    // header path, every request hits the find-then-create below, and
+    // no accessToken cookie set yet — so every request takes the proxy
+    // transport, every request hits the find-then-create below, and
     // before the row is committed the others have already passed the
     // findOne miss. Without a serialisation point, N parallel requests
     // create N duplicate rows for the same email.
@@ -594,7 +594,7 @@ async function validateAuthentication(
     // Throwing 401 here triggers the cookie-cleanup branch in the outer
     // auth() catch block: the accessToken + lastSignedIn cookies are
     // expired via err.headers, and the client's next request takes the
-    // ForwardAuth header path → new JWT for the new user.
+    // ForwardAuth proxy transport → new JWT for the new user.
     if (env.AUTH_TYPE === AUTH_TYPE_SSO && transport === "cookie") {
       const headerRaw = ctx.request.get("x-auth-request-email");
       // Bidirectional normalisation: both sides MUST be lowercased AND
@@ -620,7 +620,7 @@ async function validateAuthentication(
         // browser / fetch auto-follow the redirect, which lands on
         // Outline's home — by then the cookie is gone, ForwardAuth
         // adds the new user's X-Auth-Request-Email header, and the
-        // fwd: path issues a fresh JWT. No 401 surfaces to the SPA,
+        // proxy transport issues a fresh JWT. No 401 surfaces to the SPA,
         // no "no access to this doc" toast, no manual reload.
         //
         // We deliberately do NOT redirect to ctx.originalUrl:
