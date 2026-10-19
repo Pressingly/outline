@@ -909,6 +909,131 @@ describe("Authentication middleware", () => {
       expect(state.auth.user.id).toEqual(user.id);
     });
 
+    describe("with a client-supplied fwd: token", () => {
+      interface ForgedRequest {
+        headers?: Record<string, string>;
+        body?: Record<string, unknown>;
+        query?: Record<string, string>;
+        cookie?: string;
+      }
+
+      async function authenticateForged({
+        headers = {},
+        body = {},
+        query = {},
+        cookie,
+      }: ForgedRequest) {
+        const state = {} as DefaultState;
+        let error: unknown;
+
+        try {
+          await auth()(
+            {
+              // @ts-expect-error mock request
+              request: {
+                get: vi.fn(
+                  (header: string) => headers[header.toLowerCase()] ?? ""
+                ),
+                body,
+                query,
+              },
+              // @ts-expect-error mock cookies
+              cookies: {
+                get: vi.fn((key: string) =>
+                  key === "accessToken" ? cookie : undefined
+                ),
+                set: vi.fn(),
+              },
+              state,
+              ip: "127.0.0.1",
+              cache: {},
+            },
+            vi.fn()
+          );
+        } catch (e) {
+          error = e;
+        }
+
+        return { state, error };
+      }
+
+      const uniqueEmail = () => `${randomString(10).toLowerCase()}@example.com`;
+
+      async function buildAttackerAndVictim() {
+        const team = await buildTeam();
+        const attackerEmail = uniqueEmail();
+        const victimEmail = uniqueEmail();
+        await buildUser({ teamId: team.id, email: attackerEmail });
+        await buildAdmin({ teamId: team.id, email: victimEmail });
+        return { attackerEmail, victimEmail };
+      }
+
+      it("should reject a forged fwd: Bearer token even with a valid proxy header", async () => {
+        const { attackerEmail, victimEmail } = await buildAttackerAndVictim();
+
+        const { state, error } = await authenticateForged({
+          headers: {
+            authorization: `Bearer fwd:${victimEmail}`,
+            "x-auth-request-email": attackerEmail,
+          },
+        });
+
+        expect(error).toHaveProperty("status", 401);
+        expect(state.auth).toBeUndefined();
+      });
+
+      it("should reject a forged fwd: token in the query string", async () => {
+        const { attackerEmail, victimEmail } = await buildAttackerAndVictim();
+
+        const { state, error } = await authenticateForged({
+          headers: { "x-auth-request-email": attackerEmail },
+          query: { token: `fwd:${victimEmail}` },
+        });
+
+        expect(error).toHaveProperty("status", 401);
+        expect(state.auth).toBeUndefined();
+      });
+
+      it("should reject a forged fwd: token in the request body", async () => {
+        const { attackerEmail, victimEmail } = await buildAttackerAndVictim();
+
+        const { state, error } = await authenticateForged({
+          headers: { "x-auth-request-email": attackerEmail },
+          body: { token: `fwd:${victimEmail}` },
+        });
+
+        expect(error).toHaveProperty("status", 401);
+        expect(state.auth).toBeUndefined();
+      });
+
+      it("should reject a forged fwd: accessToken cookie and clear it", async () => {
+        const { attackerEmail, victimEmail } = await buildAttackerAndVictim();
+
+        const { state, error } = await authenticateForged({
+          headers: { "x-auth-request-email": attackerEmail },
+          cookie: `fwd:${victimEmail}`,
+        });
+
+        expect(error).toHaveProperty("status", 401);
+        expect(error).toHaveProperty(
+          ["headers", "set-cookie"],
+          expect.arrayContaining([expect.stringContaining("accessToken=;")])
+        );
+        expect(state.auth).toBeUndefined();
+      });
+
+      it("should not provision a user for a forged fwd: token", async () => {
+        const forgedEmail = uniqueEmail();
+
+        const { error } = await authenticateForged({
+          body: { token: `fwd:${forgedEmail}` },
+        });
+
+        expect(error).toHaveProperty("status", 401);
+        expect(await User.count({ where: { email: forgedEmail } })).toBe(0);
+      });
+    });
+
     it("should not honour ForwardAuth headers when AUTH_TYPE is not SSO", async () => {
       env.AUTH_TYPE = undefined;
       const state = {} as DefaultState;

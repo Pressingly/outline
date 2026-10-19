@@ -1,3 +1,7 @@
+import { AUTH_TYPE_SSO } from "@shared/constants";
+import { randomString } from "@shared/random";
+import env from "@server/env";
+import { ApiKey } from "@server/models";
 import {
   buildAdmin,
   buildApiKey,
@@ -136,6 +140,83 @@ describe("#apiKeys.create", () => {
     const res = await server.post("/api/apiKeys.create");
     expect(res.status).toEqual(401);
   });
+});
+
+describe("#apiKeys.create via ForwardAuth", () => {
+  let originalAuthType: typeof env.AUTH_TYPE;
+
+  const uniqueEmail = () => `${randomString(10).toLowerCase()}@example.com`;
+
+  beforeEach(() => {
+    originalAuthType = env.AUTH_TYPE;
+    env.AUTH_TYPE = AUTH_TYPE_SSO;
+  });
+
+  afterEach(() => {
+    env.AUTH_TYPE = originalAuthType;
+  });
+
+  it("should mint a key from the proxy header alone, as outline-mcp-server does", async () => {
+    const email = uniqueEmail();
+    const user = await buildUser({ email });
+
+    const res = await server.post("/api/apiKeys.create", {
+      headers: { "X-Auth-Request-Email": email },
+      body: { name: "moneta-mcp" },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data.userId).toEqual(user.id);
+    expect(body.data.value).toMatch(/^ol_api_/);
+  });
+
+  it.each([
+    {
+      transport: "Authorization header",
+      request: (victimEmail: string) => ({
+        path: "/api/apiKeys.create",
+        headers: { Authorization: `Bearer fwd:${victimEmail}` },
+        body: { name: "stolen" },
+      }),
+    },
+    {
+      transport: "query string",
+      request: (victimEmail: string) => ({
+        path: `/api/apiKeys.create?token=${encodeURIComponent(`fwd:${victimEmail}`)}`,
+        headers: {},
+        body: { name: "stolen" },
+      }),
+    },
+    {
+      transport: "request body",
+      request: (victimEmail: string) => ({
+        path: "/api/apiKeys.create",
+        headers: {},
+        body: { name: "stolen", token: `fwd:${victimEmail}` },
+      }),
+    },
+  ])(
+    "should not mint a key for a forged fwd: token in the $transport",
+    async ({ request }) => {
+      const attackerEmail = uniqueEmail();
+      const victimEmail = uniqueEmail();
+      const attacker = await buildUser({ email: attackerEmail });
+      const victim = await buildAdmin({
+        teamId: attacker.teamId,
+        email: victimEmail,
+      });
+      const { path, headers, body } = request(victimEmail);
+
+      const res = await server.post(path, {
+        headers: { ...headers, "X-Auth-Request-Email": attackerEmail },
+        body,
+      });
+
+      expect(res.status).toEqual(401);
+      expect(await ApiKey.count({ where: { userId: victim.id } })).toEqual(0);
+    }
+  );
 });
 
 describe("#apiKeys.list", () => {
