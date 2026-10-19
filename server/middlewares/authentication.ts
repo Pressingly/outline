@@ -55,7 +55,9 @@ type AuthenticationOptions =
       skip?: (ctx: AppContext) => boolean;
     });
 
-type AuthTransport = "cookie" | "header" | "body" | "query";
+type AuthTransport = "cookie" | "header" | "body" | "query" | "proxy";
+
+const FORWARDED_TOKEN_PREFIX = "fwd:";
 
 type AuthInput = {
   /** The authentication token extracted from the request, if any. */
@@ -119,7 +121,7 @@ export default function auth(options: AuthenticationOptions = {}) {
         // Stale-session redirect. Convert into a 302 with Location pointing
         // to /home and expire the stale session cookies. Browser / fetch
         // auto-follow the redirect with the cleared cookies, which lands on
-        // the ForwardAuth `fwd:` header path and issues a fresh JWT, so no
+        // the ForwardAuth proxy transport and issues a fresh JWT, so no
         // 401 surfaces to the SPA.
         //
         // err.headers is the only way to carry Set-Cookie + Location through
@@ -242,8 +244,8 @@ export function parseAuthentication(ctx: AppContext): AuthInput {
     const authRequestEmail = ctx.request.get("x-auth-request-email");
     if (authRequestEmail) {
       return {
-        token: `fwd:${authRequestEmail}`,
-        transport: "header",
+        token: `${FORWARDED_TOKEN_PREFIX}${authRequestEmail}`,
+        transport: "proxy",
       };
     }
   }
@@ -264,7 +266,7 @@ export function parseAuthentication(ctx: AppContext): AuthInput {
  *   `<local>@${env.DEFAULT_EMAIL_DOMAIN}` so the resulting key is the same
  *   one the User row was created under.
  *
- * Kept in sync with the synthesis logic in the `fwd:` branch of
+ * Kept in sync with the synthesis logic in the proxy-transport branch of
  * `validateAuthentication` and reused by the stale-session mismatch check.
  */
 function normalizeProxyEmail(raw: string): string {
@@ -285,6 +287,22 @@ function normalizeProxyEmail(raw: string): string {
   return isEmailShaped
     ? trimmed
     : `${trimmed.split("@")[0]}@${env.DEFAULT_EMAIL_DOMAIN}`;
+}
+
+/**
+ * A forwarded identity is only trustworthy when it was built from the proxy
+ * header. The same prefix arriving in a client-controlled transport is a
+ * forgery attempt.
+ *
+ * @param token the raw token parsed from the request.
+ * @param transport the transport the token arrived through.
+ * @returns true when the token claims a forwarded identity it did not earn.
+ */
+function isClientSuppliedForwardedToken(
+  token: string,
+  transport?: AuthTransport
+): boolean {
+  return token.startsWith(FORWARDED_TOKEN_PREFIX) && transport !== "proxy";
 }
 
 /**
@@ -341,6 +359,10 @@ async function validateAuthentication(
 
   if (!token) {
     throw AuthenticationError("Authentication required");
+  }
+
+  if (isClientSuppliedForwardedToken(token, transport)) {
+    throw AuthenticationError("Invalid token");
   }
 
   let user: User | null;
@@ -434,11 +456,13 @@ async function validateAuthentication(
 
     scope = apiKey.scope ?? ["*"];
     await apiKey.updateActiveAt();
-  } else if (token.startsWith("fwd:") && env.AUTH_TYPE === AUTH_TYPE_SSO) {
+  } else if (transport === "proxy" && env.AUTH_TYPE === AUTH_TYPE_SSO) {
     type = AuthenticationType.APP;
     service = FORWARDAUTH_SERVICE;
 
-    const email = normalizeProxyEmail(token.slice(4));
+    const email = normalizeProxyEmail(
+      token.slice(FORWARDED_TOKEN_PREFIX.length)
+    );
     checkCorporateId(ctx);
     const { local: localPart, domain } = parseEmail(email);
 
@@ -453,8 +477,8 @@ async function validateAuthentication(
 
     // Concurrent-creation race guard. The SPA on first-ever login fires
     // multiple parallel API requests (docs, team, access tokens, …) with
-    // no accessToken cookie set yet — so every request takes the `fwd:`
-    // header path, every request hits the find-then-create below, and
+    // no accessToken cookie set yet — so every request takes the proxy
+    // transport, every request hits the find-then-create below, and
     // before the row is committed the others have already passed the
     // findOne miss. Without a serialisation point, N parallel requests
     // create N duplicate rows for the same email.
@@ -570,7 +594,7 @@ async function validateAuthentication(
     // Throwing 401 here triggers the cookie-cleanup branch in the outer
     // auth() catch block: the accessToken + lastSignedIn cookies are
     // expired via err.headers, and the client's next request takes the
-    // ForwardAuth header path → new JWT for the new user.
+    // ForwardAuth proxy transport → new JWT for the new user.
     if (env.AUTH_TYPE === AUTH_TYPE_SSO && transport === "cookie") {
       const headerRaw = ctx.request.get("x-auth-request-email");
       // Bidirectional normalisation: both sides MUST be lowercased AND
@@ -596,7 +620,7 @@ async function validateAuthentication(
         // browser / fetch auto-follow the redirect, which lands on
         // Outline's home — by then the cookie is gone, ForwardAuth
         // adds the new user's X-Auth-Request-Email header, and the
-        // fwd: path issues a fresh JWT. No 401 surfaces to the SPA,
+        // proxy transport issues a fresh JWT. No 401 surfaces to the SPA,
         // no "no access to this doc" toast, no manual reload.
         //
         // We deliberately do NOT redirect to ctx.originalUrl:

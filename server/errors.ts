@@ -37,7 +37,7 @@ export function InvalidAuthenticationError(
  *
  * Auto-follow semantics make this transparent for GET requests: the
  * browser / fetch re-issues to `redirectTo` with the just-cleared cookie
- * gone, which lands on the ForwardAuth `fwd:` header path and gets a
+ * gone, which lands on the ForwardAuth proxy transport and gets a
  * fresh JWT for the new upstream user. No 401 reaches the frontend.
  */
 export function StaleSessionRedirect(redirectTo: string) {
