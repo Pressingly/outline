@@ -55,7 +55,9 @@ type AuthenticationOptions =
       skip?: (ctx: AppContext) => boolean;
     });
 
-type AuthTransport = "cookie" | "header" | "body" | "query";
+type AuthTransport = "cookie" | "header" | "body" | "query" | "proxy";
+
+const FORWARDED_TOKEN_PREFIX = "fwd:";
 
 type AuthInput = {
   /** The authentication token extracted from the request, if any. */
@@ -242,8 +244,8 @@ export function parseAuthentication(ctx: AppContext): AuthInput {
     const authRequestEmail = ctx.request.get("x-auth-request-email");
     if (authRequestEmail) {
       return {
-        token: `fwd:${authRequestEmail}`,
-        transport: "header",
+        token: `${FORWARDED_TOKEN_PREFIX}${authRequestEmail}`,
+        transport: "proxy",
       };
     }
   }
@@ -285,6 +287,22 @@ function normalizeProxyEmail(raw: string): string {
   return isEmailShaped
     ? trimmed
     : `${trimmed.split("@")[0]}@${env.DEFAULT_EMAIL_DOMAIN}`;
+}
+
+/**
+ * A forwarded identity is only trustworthy when it was built from the proxy
+ * header. The same prefix arriving in a client-controlled transport is a
+ * forgery attempt.
+ *
+ * @param token the raw token parsed from the request.
+ * @param transport the transport the token arrived through.
+ * @returns true when the token claims a forwarded identity it did not earn.
+ */
+function isClientSuppliedForwardedToken(
+  token: string,
+  transport?: AuthTransport
+): boolean {
+  return token.startsWith(FORWARDED_TOKEN_PREFIX) && transport !== "proxy";
 }
 
 /**
@@ -341,6 +359,10 @@ async function validateAuthentication(
 
   if (!token) {
     throw AuthenticationError("Authentication required");
+  }
+
+  if (isClientSuppliedForwardedToken(token, transport)) {
+    throw AuthenticationError("Invalid token");
   }
 
   let user: User | null;
@@ -434,11 +456,13 @@ async function validateAuthentication(
 
     scope = apiKey.scope ?? ["*"];
     await apiKey.updateActiveAt();
-  } else if (token.startsWith("fwd:") && env.AUTH_TYPE === AUTH_TYPE_SSO) {
+  } else if (transport === "proxy" && env.AUTH_TYPE === AUTH_TYPE_SSO) {
     type = AuthenticationType.APP;
     service = FORWARDAUTH_SERVICE;
 
-    const email = normalizeProxyEmail(token.slice(4));
+    const email = normalizeProxyEmail(
+      token.slice(FORWARDED_TOKEN_PREFIX.length)
+    );
     checkCorporateId(ctx);
     const { local: localPart, domain } = parseEmail(email);
 
