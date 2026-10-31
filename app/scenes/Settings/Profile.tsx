@@ -3,6 +3,7 @@ import { ProfileIcon } from "outline-icons";
 import * as React from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import { errToString } from "@shared/utils/error";
 import Button from "~/components/Button";
 import Heading from "~/components/Heading";
@@ -23,6 +24,7 @@ const Profile = () => {
   const form = React.useRef<HTMLFormElement>(null);
   const [name, setName] = React.useState<string>(user.name);
   const { t } = useTranslation();
+  const canChangeEmail = env.EMAIL_ENABLED && env.AUTH_TYPE !== AUTH_TYPE_SSO;
 
   const handleSubmit = async (ev: React.SyntheticEvent) => {
     ev.preventDefault();
@@ -81,7 +83,7 @@ const Profile = () => {
           />
         </SettingRow>
         <SettingRow
-          border={env.EMAIL_ENABLED}
+          border={canChangeEmail}
           label={t("Name")}
           name="name"
           description={t(
@@ -99,7 +101,7 @@ const Profile = () => {
           />
         </SettingRow>
 
-        {env.EMAIL_ENABLED && (
+        {canChangeEmail && (
           <SettingRow border={false} label={t("Email address")} name="email">
             <Input
               type="email"

@@ -6,8 +6,10 @@ import {
   UserRemoveIcon,
 } from "outline-icons";
 import { toast } from "sonner";
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import { UserRole } from "@shared/types";
 import { UserRoleHelper } from "@shared/utils/UserRoleHelper";
+import env from "~/env";
 import stores from "~/stores";
 import User from "~/models/User";
 import Invite from "~/scenes/Invite";
@@ -135,7 +137,8 @@ export const changeUserEmail = dialogActionFactory({
       <UserChangeEmailDialog user={user} onSubmit={onSubmit} />
     ) : null;
   },
-  visible: (context) => canUpdateSingleUser(context),
+  visible: (context) =>
+    env.AUTH_TYPE !== AUTH_TYPE_SSO && canUpdateSingleUser(context),
 });
 
 export const suspendUser = dialogActionFactory({

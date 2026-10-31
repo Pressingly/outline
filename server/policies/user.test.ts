@@ -55,6 +55,60 @@ describe("policies/user", () => {
     });
   });
 
+  describe("updateEmail", () => {
+    it("should allow users to change their own email by default", async () => {
+      const user = await buildUser();
+      const abilities = serialize(user, user);
+      expect(abilities.updateEmail).toBeTruthy();
+    });
+
+    it("should allow admins to change other users' email by default", async () => {
+      const admin = await buildAdmin();
+      const user = await buildUser({ teamId: admin.teamId });
+      const abilities = serialize(admin, user);
+      expect(abilities.updateEmail).toBeTruthy();
+    });
+
+    it("should not allow members to change other users' email", async () => {
+      const user = await buildUser();
+      const other = await buildUser({ teamId: user.teamId });
+      const abilities = serialize(user, other);
+      expect(abilities.updateEmail).toBeFalsy();
+    });
+
+    describe("when AUTH_TYPE is SSO", () => {
+      let originalAuthType: string | undefined;
+
+      beforeEach(() => {
+        originalAuthType = env.AUTH_TYPE;
+        env.AUTH_TYPE = AUTH_TYPE_SSO;
+      });
+
+      afterEach(() => {
+        env.AUTH_TYPE = originalAuthType;
+      });
+
+      it("should not allow users to change their own email", async () => {
+        const user = await buildUser();
+        const abilities = serialize(user, user);
+        expect(abilities.updateEmail).toBeFalsy();
+      });
+
+      it("should not allow admins to change other users' email", async () => {
+        const admin = await buildAdmin();
+        const user = await buildUser({ teamId: admin.teamId });
+        const abilities = serialize(admin, user);
+        expect(abilities.updateEmail).toBeFalsy();
+      });
+
+      it("should still allow users to update the rest of their profile", async () => {
+        const user = await buildUser();
+        const abilities = serialize(user, user);
+        expect(abilities.update).toBeTruthy();
+      });
+    });
+  });
+
   describe("readEmail", () => {
     it("should allow user to read their own email", async () => {
       const team = await buildTeam();

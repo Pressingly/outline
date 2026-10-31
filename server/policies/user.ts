@@ -48,6 +48,16 @@ allow(User, ["update", "readDetails", "listApiKeys"], User, (actor, user) =>
   )
 );
 
+// Under SSO the email is the identity key, so changing it would orphan the
+// account the proxy-asserted identity maps to.
+allow(User, "updateEmail", User, (actor, user) => {
+  if (env.AUTH_TYPE === AUTH_TYPE_SSO) {
+    return false;
+  }
+
+  return or(isTeamAdmin(actor, user), actor.id === user?.id);
+});
+
 allow(User, "readEmail", [User, Team], (actor, model) => {
   if (model instanceof User && actor.id === model.id) {
     return true;

@@ -186,7 +186,7 @@ router.post(
     const user = id ? await User.findByPk(id) : actor;
     const email = ctx.input.body.email.trim().toLowerCase();
 
-    authorize(actor, "update", user);
+    authorize(actor, "updateEmail", user);
 
     // Check if email domain is allowed
     if (!(await team.isDomainAllowed(email))) {
@@ -247,7 +247,7 @@ router.get(
     }
 
     const { user: actor } = ctx.state.auth;
-    authorize(actor, "update", user);
+    authorize(actor, "updateEmail", user);
 
     // Check if email domain is allowed
     if (!(await actor.team.isDomainAllowed(email))) {
