@@ -59,21 +59,21 @@ describe("policies/user", () => {
     it("should allow users to change their own email by default", async () => {
       const user = await buildUser();
       const abilities = serialize(user, user);
-      expect(abilities.updateEmail).toBeTruthy();
+      expect(abilities.updateEmail).toBe(true);
     });
 
     it("should allow admins to change other users' email by default", async () => {
       const admin = await buildAdmin();
       const user = await buildUser({ teamId: admin.teamId });
       const abilities = serialize(admin, user);
-      expect(abilities.updateEmail).toBeTruthy();
+      expect(abilities.updateEmail).toBe(true);
     });
 
     it("should not allow members to change other users' email", async () => {
       const user = await buildUser();
       const other = await buildUser({ teamId: user.teamId });
       const abilities = serialize(user, other);
-      expect(abilities.updateEmail).toBeFalsy();
+      expect(abilities.updateEmail).toBe(false);
     });
 
     describe("when AUTH_TYPE is SSO", () => {
@@ -91,14 +91,14 @@ describe("policies/user", () => {
       it("should not allow users to change their own email", async () => {
         const user = await buildUser();
         const abilities = serialize(user, user);
-        expect(abilities.updateEmail).toBeFalsy();
+        expect(abilities.updateEmail).toBe(false);
       });
 
       it("should not allow admins to change other users' email", async () => {
         const admin = await buildAdmin();
         const user = await buildUser({ teamId: admin.teamId });
         const abilities = serialize(admin, user);
-        expect(abilities.updateEmail).toBeFalsy();
+        expect(abilities.updateEmail).toBe(false);
       });
 
       it("should still allow users to update the rest of their profile", async () => {
