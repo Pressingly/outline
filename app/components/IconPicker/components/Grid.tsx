@@ -1,6 +1,6 @@
 import React from "react";
-import type { ListChildComponentProps } from "react-window";
-import { FixedSizeList } from "react-window";
+import type { ListImperativeAPI, RowComponentProps } from "react-window";
+import { List } from "react-window";
 import styled from "styled-components";
 
 type Props = {
@@ -10,12 +10,18 @@ type Props = {
   columns: number;
   itemWidth: number;
   onOverflowChange?: (hasMoreBelow: boolean) => void;
+  ref?: React.Ref<ListImperativeAPI>;
 };
 
-const Grid = (
-  { width, height, data, columns, itemWidth, onOverflowChange }: Props,
-  ref: React.Ref<HTMLDivElement>
-) => {
+function Grid({
+  width,
+  height,
+  data,
+  columns,
+  itemWidth,
+  onOverflowChange,
+  ref,
+}: Props) {
   const offsetRef = React.useRef(0);
   const maxOffset = Math.max(0, data.length * itemWidth - height);
 
@@ -27,59 +33,56 @@ const Grid = (
   React.useEffect(notify, [notify]);
 
   const handleScroll = React.useCallback(
-    ({ scrollOffset }: { scrollOffset: number }) => {
-      offsetRef.current = scrollOffset;
+    (event: React.UIEvent<HTMLDivElement>) => {
+      offsetRef.current = event.currentTarget.scrollTop;
       notify();
     },
     [notify]
   );
 
+  const style = React.useMemo(() => ({ width, height }), [width, height]);
+  const rowProps = React.useMemo(() => ({ data, columns }), [data, columns]);
+
   return (
     <Container
-      outerRef={ref}
-      width={width}
-      height={height}
-      itemCount={data.length}
-      itemSize={itemWidth}
-      itemData={{ data, columns }}
+      listRef={ref}
+      style={style}
+      rowCount={data.length}
+      rowHeight={itemWidth}
+      rowComponent={Row}
+      rowProps={rowProps}
       onScroll={handleScroll}
-    >
-      {Row}
-    </Container>
+    />
   );
-};
+}
 
 type RowProps = {
   data: React.ReactNode[][];
   columns: number;
 };
 
-const Row = ({ index, style, data }: ListChildComponentProps<RowProps>) => {
-  const { data: rows, columns } = data;
-  const row = rows[index];
+const Row = ({
+  index,
+  style,
+  ariaAttributes,
+  data,
+  columns,
+}: RowComponentProps<RowProps>) => (
+  <RowContainer style={style} columns={columns} {...ariaAttributes}>
+    {data[index]}
+  </RowContainer>
+);
 
-  return (
-    <RowContainer style={style} columns={columns}>
-      {row}
-    </RowContainer>
-  );
-};
-
-const Container = styled(FixedSizeList<RowProps>)`
-  padding: 0px 12px;
+const Container = styled(List<RowProps>)`
   overflow-x: hidden !important;
-
-  // Needed for the absolutely positioned children
-  // to respect the VirtualList's padding
-  & > div {
-    position: relative;
-  }
 `;
 
+// Rows are absolutely positioned, so the horizontal padding lives here.
 const RowContainer = styled.div<{ columns: number }>`
   display: grid;
   grid-template-columns: ${({ columns }) => `repeat(${columns}, 1fr)`};
   align-content: center;
+  padding: 0 12px;
 `;
 
-export default React.forwardRef(Grid);
+export default Grid;

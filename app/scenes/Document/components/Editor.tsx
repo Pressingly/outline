@@ -20,6 +20,7 @@ import Editor from "~/components/Editor";
 import { useSplitView } from "~/components/SplitView/context";
 import type { Editor as SharedEditor } from "~/editor";
 import Flex from "~/components/Flex";
+import { headerMetaStyles } from "~/components/HeaderMeta";
 import PlaceholderDocument from "~/components/PlaceholderDocument";
 import Time from "~/components/Time";
 import { withUIExtensions } from "~/editor/extensions";
@@ -61,13 +62,14 @@ type Props = Omit<EditorProps, "editorStyle"> & {
     publish?: boolean;
   }) => void;
   children?: React.ReactNode;
+  ref?: React.Ref<SharedEditor>;
 };
 
 /**
  * The main document editor includes an editable title with metadata below it,
  * and support for commenting.
  */
-function DocumentEditor(props: Props, ref: React.ForwardedRef<SharedEditor>) {
+function DocumentEditor(props: Props) {
   const editorRef = React.useRef<SharedEditor>(null);
   const titleRef = React.useRef<RefHandle>(null);
   const { t } = useTranslation();
@@ -90,6 +92,7 @@ function DocumentEditor(props: Props, ref: React.ForwardedRef<SharedEditor>) {
     readOnly,
     children,
     multiplayer,
+    ref,
     ...rest
   } = props;
   const can = usePolicy(document);
@@ -225,9 +228,7 @@ function DocumentEditor(props: Props, ref: React.ForwardedRef<SharedEditor>) {
         readOnly={readOnly}
         documentId={document.id}
         title={
-          !document.title && readOnly
-            ? document.titleWithDefault
-            : document.title
+          !document.title && readOnly ? document.displayTitle : document.title
         }
         icon={document.icon}
         color={iconColor}
@@ -263,7 +264,6 @@ function DocumentEditor(props: Props, ref: React.ForwardedRef<SharedEditor>) {
         <EditorComponent
           ref={mergeRefs([ref, editorRef, handleRefChanged])}
           lang={getLangFor(document.language)}
-          autoFocus={!!document.title && !props.defaultValue}
           placeholder={t("Type '/' to insert, or start writing…")}
           scrollTo={decodeURIComponentSafe(location.hash)}
           readOnly={readOnly}
@@ -305,8 +305,7 @@ function DocumentEditor(props: Props, ref: React.ForwardedRef<SharedEditor>) {
 }
 
 const SharedMeta = styled(Text)`
-  margin: -12px 0 2em 0;
-  font-size: 14px;
+  ${headerMetaStyles}
 `;
 
-export default observer(React.forwardRef(DocumentEditor));
+export default observer(DocumentEditor);

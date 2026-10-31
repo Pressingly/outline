@@ -1,4 +1,4 @@
-import Router from "koa-router";
+import Router from "@koa/router";
 import type { WhereOptions } from "sequelize";
 import { Op, Sequelize } from "sequelize";
 import { NotificationEventType, UserRole } from "@shared/types";
@@ -10,7 +10,7 @@ import ConfirmUpdateEmail from "@server/emails/templates/ConfirmUpdateEmail";
 import ConfirmUserDeleteEmail from "@server/emails/templates/ConfirmUserDeleteEmail";
 import InviteEmail from "@server/emails/templates/InviteEmail";
 import env from "@server/env";
-import { ValidationError } from "@server/errors";
+import { AuthorizationError, ValidationError } from "@server/errors";
 import logger from "@server/logging/Logger";
 import auth from "@server/middlewares/authentication";
 import { rateLimiter } from "@server/middlewares/rateLimiter";
@@ -27,6 +27,7 @@ import { UserFlag } from "@server/models/User";
 import { can, authorize } from "@server/policies";
 import { presentUser, presentPolicies } from "@server/presenters";
 import type { APIContext } from "@server/types";
+import { AuthenticationType } from "@server/types";
 import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import { safeEqual } from "@server/utils/crypto";
 import { QueryHelper } from "@server/storage/QueryHelper";
@@ -85,6 +86,16 @@ router.post(
       where[Op.and].push({ suspendedAt: { [Op.is]: null } });
     }
 
+    // Filtering or sorting by email would reveal addresses the actor may not see.
+    const canReadEmails = can(actor, "readEmail", actor.team);
+    if (
+      !canReadEmails &&
+      (sort === "email" ||
+        (filter !== undefined && hasFieldInFilter(filter, "email")))
+    ) {
+      throw AuthorizationError();
+    }
+
     if (filter) {
       where[Op.and].push(buildWhere<User>(filter));
     }
@@ -92,9 +103,13 @@ router.post(
     if (query) {
       where[Op.and].push({
         [Op.or]: [
-          Sequelize.literal(
-            `unaccent(LOWER("user"."email")) like unaccent(LOWER(:query))`
-          ),
+          ...(canReadEmails
+            ? [
+                Sequelize.literal(
+                  `unaccent(LOWER("user"."email")) like unaccent(LOWER(:query))`
+                ),
+              ]
+            : []),
           Sequelize.literal(
             `unaccent(LOWER("user"."name")) like unaccent(LOWER(:query))`
           ),
@@ -118,7 +133,6 @@ router.post(
       }),
       User.count({
         where,
-        // @ts-expect-error Types are incorrect for count
         replacements,
       }),
     ]);
@@ -159,11 +173,11 @@ router.post(
 router.post(
   "users.updateEmail",
   rateLimiter(RateLimiterStrategy.TenPerHour),
-  auth(),
+  auth({ type: AuthenticationType.APP }),
   validate(T.UsersUpdateEmailSchema),
   async (ctx: APIContext<T.UsersUpdateEmailReq>) => {
     if (!env.EMAIL_ENABLED) {
-      throw ValidationError("Email support is not setup for this instance");
+      throw ValidationError("Email support is not set up for this instance");
     }
 
     const { user: actor } = ctx.state.auth;
@@ -201,12 +215,12 @@ router.post(
 router.get(
   "users.updateEmail",
   rateLimiter(RateLimiterStrategy.TenPerHour),
-  auth(),
+  auth({ type: AuthenticationType.APP }),
   transaction(),
   validate(T.UsersUpdateEmailConfirmSchema),
   async (ctx: APIContext<T.UsersUpdateEmailConfirmReq>) => {
     if (!env.EMAIL_ENABLED) {
-      throw ValidationError("Email support is not setup for this instance");
+      throw ValidationError("Email support is not set up for this instance");
     }
 
     const { transaction } = ctx.state;
@@ -371,10 +385,11 @@ async function updateRole(ctx: APIContext<T.UsersChangeRoleReq>) {
   const actor = ctx.state.auth.user;
 
   const user = await User.findByPk(userId, {
-    rejectOnEmpty: true,
     transaction,
     lock: transaction.LOCK.UPDATE,
   });
+  authorize(actor, "update", user);
+
   await Team.findByPk(user.teamId, {
     transaction,
     lock: transaction.LOCK.UPDATE,
@@ -396,6 +411,9 @@ async function updateRole(ctx: APIContext<T.UsersChangeRoleReq>) {
   if (UserRoleHelper.canPromote(user, role)) {
     name = "promote";
     authorize(actor, "promote", user);
+  }
+  if (role === UserRole.Guest) {
+    authorize(actor, "addGuest", actor.team);
   }
 
   await user.updateWithCtx(ctx, { role }, { name });
@@ -568,7 +586,7 @@ router.post(
   auth(),
   async (ctx: APIContext) => {
     if (!env.EMAIL_ENABLED) {
-      throw ValidationError("Email support is not setup for this instance");
+      throw ValidationError("Email support is not set up for this instance");
     }
 
     const { user } = ctx.state.auth;

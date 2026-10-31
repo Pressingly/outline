@@ -111,12 +111,6 @@ function DocumentHeader({
   const canToggleEmbeds = team?.documentEmbeds;
   const showContents = ui.tocVisible === true;
 
-  useEffect(() => {
-    if (isMobile && showContents) {
-      ui.set({ tocVisible: false });
-    }
-  }, [isMobile, showContents, ui]);
-
   const toc = (
     <Tooltip
       content={
@@ -127,7 +121,7 @@ function DocumentHeader({
             : `${t("Show contents")} (${t("available when headings are added")})`
       }
       shortcut={`Ctrl+${altDisplay}+h`}
-      placement="bottom"
+      side="bottom"
     >
       <TocButton
         aria-label={t("Show contents")}
@@ -145,7 +139,7 @@ function DocumentHeader({
           noun: document.noun,
         })}
         shortcut="e"
-        placement="bottom"
+        side="bottom"
       >
         <Button
           as={Link}
@@ -176,9 +170,7 @@ function DocumentHeader({
       $hidden={isEditingFocus}
       hasSidebar
       left={
-        isMobile ? (
-          <TableOfContentsMenu />
-        ) : (
+        isMobile ? null : (
           <DocumentBreadcrumb document={document}>
             {toc}{" "}
             <StarAction>
@@ -230,7 +222,7 @@ function DocumentHeader({
               <Tooltip
                 content={isDraft ? t("Save draft") : t("Done editing")}
                 shortcut={`${metaDisplay}+enter`}
-                placement="bottom"
+                side="bottom"
               >
                 <Button
                   onClick={handleSave}
@@ -263,7 +255,7 @@ function DocumentHeader({
                 <ChangesNavigation />
               </Action>
               <Action>
-                <Tooltip content={t("Restore version")} placement="bottom">
+                <Tooltip content={t("Restore version")} side="bottom">
                   <Button
                     action={restoreRevision}
                     disabled={revision.createdAt === document.updatedAt}
@@ -286,6 +278,11 @@ function DocumentHeader({
               >
                 {document.collectionId ? t("Publish") : `${t("Publish")}…`}
               </Button>
+            </Action>
+          )}
+          {isMobile && (
+            <Action>
+              <TableOfContentsMenu />
             </Action>
           )}
           <Action>

@@ -131,18 +131,25 @@ export default class WebsocketsProcessor {
         const documentToPresent = await presentDocument(undefined, document);
 
         const channels = await this.getDocumentEventChannels(event, document);
+        channels.push(`user-${document.createdById}`);
 
-        // We need to add the collection channel to let the members update the doc structure.
         // In case draft is detached from a collection, fallback to previous attribute to get the right one.
         const collectionId =
           event.collectionId ?? event.changes?.previous.collectionId;
 
-        channels.push(`collection-${collectionId}`);
-
-        return socketio.to(channels).emit(event.name, {
+        socketio.to(channels).emit(event.name, {
           document: documentToPresent,
           collectionId,
         });
+
+        // Other collection members only receive the ID so they can remove the draft.
+        return socketio
+          .to(`collection-${collectionId}`)
+          .except(channels)
+          .emit(event.name, {
+            document: { id: document.id },
+            collectionId,
+          });
       }
 
       case "documents.unarchive": {
@@ -734,7 +741,7 @@ export default class WebsocketsProcessor {
           return;
         }
         return socketio
-          .to(`team-${group.teamId}`)
+          .to(`team-${group.teamId}.members`)
           .emit(event.name, await presentGroup(group));
       }
 
@@ -751,7 +758,7 @@ export default class WebsocketsProcessor {
         }
 
         socketio
-          .to(`team-${event.teamId}`)
+          .to(`team-${event.teamId}.members`)
           .emit("groups.add_user", presentGroupUser(groupUser));
         socketio
           .in(`user-${event.userId}`)
@@ -801,7 +808,7 @@ export default class WebsocketsProcessor {
 
         // let everyone with access to the group know a user was removed
         socketio
-          .to(`team-${event.teamId}`)
+          .to(`team-${event.teamId}.members`)
           .emit("groups.remove_user", membership);
         socketio
           .in(`user-${event.userId}`)
@@ -852,7 +859,7 @@ export default class WebsocketsProcessor {
       }
 
       case "groups.delete": {
-        socketio.to(`team-${event.teamId}`).emit(event.name, {
+        socketio.to(`team-${event.teamId}.members`).emit(event.name, {
           modelId: event.modelId,
         });
         socketio

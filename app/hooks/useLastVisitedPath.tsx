@@ -48,7 +48,7 @@ export function clearLastVisitedPath(): void {
  * @param currentPath The current path to track.
  */
 export function useTrackLastVisitedPath(currentPath: string): void {
-  const prevPathRef = useRef<string>();
+  const prevPathRef = useRef<string | undefined>(undefined);
 
   // Update localStorage directly if path has changed
   if (

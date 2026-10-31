@@ -2,8 +2,9 @@ import Revision from "@server/models/Revision";
 import { buildCollection, buildDocument } from "@server/test/factories";
 import { ChangesetHelper } from "@shared/editor/lib/ChangesetHelper";
 import { EditorStyleHelper } from "@shared/editor/styles/EditorStyleHelper";
-import { HeadingPrefixStyle } from "@shared/types";
+import { HeadingPrefixStyle, TextEditMode } from "@shared/types";
 import { DocumentHelper } from "./DocumentHelper";
+import { ProsemirrorHelper } from "./ProsemirrorHelper";
 
 describe("DocumentHelper", () => {
   beforeAll(() => {
@@ -80,6 +81,54 @@ describe("DocumentHelper", () => {
         ],
         type: "doc",
       });
+    });
+  });
+
+  describe("toProsemirror", () => {
+    const linkContent = () => ({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "text",
+              text: "link",
+              marks: [{ type: "link", attrs: { href: "/doc/internal-123" } }],
+            },
+          ],
+        },
+      ],
+    });
+
+    it("should memoize the node for the same content", async () => {
+      const document = await buildDocument({ content: linkContent() });
+      const node = DocumentHelper.toProsemirror(document);
+
+      expect(DocumentHelper.toProsemirror(document)).toBe(node);
+    });
+
+    it("should parse again when the content is replaced", async () => {
+      const document = await buildDocument({ content: linkContent() });
+      const node = DocumentHelper.toProsemirror(document);
+      document.content = linkContent();
+
+      expect(DocumentHelper.toProsemirror(document)).not.toBe(node);
+    });
+
+    it("should not be changed by transforms of its JSON", async () => {
+      const document = await buildDocument({ content: linkContent() });
+      const node = DocumentHelper.toProsemirror(document);
+
+      ProsemirrorHelper.replaceInternalUrls(node, "/s/share-123");
+      ProsemirrorHelper.replaceDocumentReferences(
+        node,
+        new Map([["internal-123", { id: "other", path: "/doc/other" }]])
+      );
+
+      const text =
+        DocumentHelper.toProsemirror(document).firstChild?.firstChild;
+      expect(text?.marks[0].attrs.href).toBe("/doc/internal-123");
     });
   });
 
@@ -192,9 +241,9 @@ describe("DocumentHelper", () => {
         includeStyles: false,
       });
 
-      expect(result).toContain('data-heading-prefix="1"');
+      expect(result).toContain('data-heading-prefix="1."');
       expect(result).toContain('data-heading-prefix="1.1"');
-      expect(result).toContain('data-heading-prefix="2"');
+      expect(result).toContain('data-heading-prefix="2."');
     });
 
     it("should not number headings without the document preference", async () => {
@@ -224,7 +273,7 @@ describe("DocumentHelper", () => {
         includeStyles: false,
       });
 
-      expect(result).toContain('data-heading-prefix="1"');
+      expect(result).toContain('data-heading-prefix="1."');
       expect(result).toContain('data-heading-prefix="1.1"');
     });
 
@@ -382,6 +431,102 @@ describe("DocumentHelper", () => {
       });
 
       expect(result).toContain(EditorStyleHelper.diffInsertion);
+    });
+  });
+
+  describe("toMarkdownDiff", () => {
+    it("should return unified diff hunks of the markdown", async () => {
+      const before = await buildDocument({
+        text: "Intro\n\n- [ ] Task one\n- [ ] Task two\n\nOutro",
+      });
+      const after = await buildDocument({
+        text: "Intro\n\n- [x] Task one\n- [ ] Task two\n- [ ] Task three\n\nOutro",
+      });
+
+      const result = DocumentHelper.toMarkdownDiff(before, after);
+
+      expect(result).toEqual(
+        [
+          "@@ -1,6 +1,7 @@",
+          " Intro",
+          " ",
+          "-- [ ] Task one",
+          "+- [x] Task one",
+          " - [ ] Task two",
+          "+- [ ] Task three",
+          " ",
+          " Outro",
+        ].join("\n")
+      );
+    });
+
+    it("should limit the context around each change", async () => {
+      const lines = Array.from({ length: 20 }, (_, i) => `Line ${i}`);
+      const before = await buildDocument({ text: lines.join("\n\n") });
+      const after = await buildDocument({
+        text: lines.map((l, i) => (i === 10 ? "Changed" : l)).join("\n\n"),
+      });
+
+      const result = DocumentHelper.toMarkdownDiff(before, after, {
+        context: 1,
+      });
+
+      expect(result).toEqual(
+        ["@@ -20,3 +20,3 @@", " ", "-Line 10", "+Changed", " "].join("\n")
+      );
+    });
+
+    it("should treat a null before document as empty", async () => {
+      const after = await buildDocument({ text: "Hello" });
+
+      const result = DocumentHelper.toMarkdownDiff(null, after);
+
+      expect(result).toEqual(["@@ -0,0 +1,1 @@", "+Hello"].join("\n"));
+    });
+
+    it("should return an empty string when nothing changed", async () => {
+      const before = await buildDocument({ text: "Same" });
+      const after = await buildDocument({ text: "Same" });
+
+      expect(DocumentHelper.toMarkdownDiff(before, after)).toEqual("");
+    });
+
+    it("should keep the raw serializer output that patch edits search", async () => {
+      const before = await buildDocument({ text: "One\n\n\\\n\nTwo" });
+      const after = await buildDocument({ text: "One\n\n\\\n\nThree" });
+
+      const result = DocumentHelper.toMarkdownDiff(before, after);
+
+      expect(result).toEqual(
+        ["@@ -2,3 +2,3 @@", " ", " \\", "-Two", "+Three"].join("\n")
+      );
+
+      // Context and added lines together are a valid patch target.
+      const findText = (result ?? "")
+        .split("\n")
+        .filter((line) => line.startsWith(" ") || line.startsWith("+"))
+        .map((line) => line.slice(1))
+        .join("\n");
+      const patched = DocumentHelper.applyMarkdownToDocument(
+        after,
+        "\n\\\nFour",
+        TextEditMode.Patch,
+        findText
+      );
+      expect(await DocumentHelper.toMarkdown(patched)).toContain("Four");
+    });
+
+    it("should return undefined when the diff does not complete in time", async () => {
+      const lines = Array.from({ length: 100 }, (_, i) => `Line ${i}`);
+      const before = await buildDocument({ text: lines.join("\n\n") });
+      const after = await buildDocument({
+        text: [...lines].reverse().join("\n\n"),
+      });
+
+      expect(
+        DocumentHelper.toMarkdownDiff(before, after, { timeout: 0 })
+      ).toBeUndefined();
+      expect(DocumentHelper.toMarkdownDiff(before, after)).toContain("+Line 0");
     });
   });
 
@@ -1317,6 +1462,54 @@ Second notes.`,
         `## Notes
 
 Second notes.`
+      );
+    });
+
+    it("should resolve anchors for a heading that ends in a number", async () => {
+      const document = await buildDocument({
+        text: `## Setup
+
+First setup.
+
+## Setup
+
+Second setup.
+
+## Setup 1
+
+Third setup.`,
+      });
+
+      expect(DocumentHelper.getAnchorContent(document, "h-setup-1")).toBe(
+        `## Setup
+
+Second setup.`
+      );
+      expect(DocumentHelper.getAnchorContent(document, "h-setup-1-1")).toBe(
+        `## Setup 1
+
+Third setup.`
+      );
+    });
+
+    it("should count nested headings when numbering duplicates", async () => {
+      const document = await buildDocument({
+        text: `> ## Notes
+>
+> Quoted notes.
+
+## Notes
+
+Top-level notes.`,
+      });
+
+      expect(
+        DocumentHelper.getAnchorContent(document, "h-notes")
+      ).toBeUndefined();
+      expect(DocumentHelper.getAnchorContent(document, "h-notes-1")).toBe(
+        `## Notes
+
+Top-level notes.`
       );
     });
 

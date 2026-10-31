@@ -1,12 +1,10 @@
-/* oxlint-disable @typescript-eslint/no-misused-promises */
 import http from "node:http";
 import https from "node:https";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import Koa from "koa";
 import helmet from "koa-helmet";
 import logger from "koa-logger";
-import Router from "koa-router";
-import stoppable from "stoppable";
+import Router from "@koa/router";
 import { toError } from "@shared/utils/error";
 import env from "./env";
 import Metrics from "@server/logging/Metrics";
@@ -22,7 +20,7 @@ import { CacheHelper } from "./utils/CacheHelper";
 import { PluginManager } from "./utils/PluginManager";
 import { redirectOnClient } from "./utils/redirectOnClient";
 import { RedisPrefixHelper } from "./utils/RedisPrefixHelper";
-import ShutdownHelper, { ShutdownOrder } from "./utils/ShutdownHelper";
+import { ShutdownHelper, ShutdownOrder } from "./utils/ShutdownHelper";
 import { getSSLOptions } from "./utils/ssl";
 import { checkUpdates } from "./utils/updates";
 
@@ -31,7 +29,7 @@ import { checkUpdates } from "./utils/updates";
  * graph (Sequelize models, services, middleware) is loaded, so it is imported
  * dynamically from the entry point to keep the supervising master process lean.
  *
- * @param id the cluster worker id assigned by throng.
+ * @param id the cluster worker id assigned by the ClusterManager.
  * @param disconnect callback used to signal the worker has stopped.
  */
 export async function start(id: number, disconnect: () => void) {
@@ -50,12 +48,9 @@ export async function start(id: number, disconnect: () => void) {
   // If a --port flag is passed then it takes priority over the env variable
   const normalizedPort = getArg("port", "p") || env.PORT;
   const app = new Koa();
-  const server = stoppable(
-    useHTTPS
-      ? https.createServer(ssl, app.callback())
-      : http.createServer(app.callback()),
-    ShutdownHelper.connectionGraceTimeout
-  );
+  const server = useHTTPS
+    ? https.createServer(ssl, app.callback())
+    : http.createServer(app.callback());
   const router = new Router();
 
   // install basic middleware shared by all services
@@ -63,7 +58,15 @@ export async function start(id: number, disconnect: () => void) {
     app.use(logger((str) => Logger.info("http", str)));
   }
 
-  app.use(helmet());
+  // Cross-origin isolation headers are left off, as attachments, avatars, and
+  // CDN assets are loaded across origins and from custom domains.
+  app.use(
+    helmet({
+      crossOriginOpenerPolicy: false,
+      crossOriginResourcePolicy: false,
+      originAgentCluster: false,
+    })
+  );
 
   // catch errors in one place, automatically set status and response headers
   onerror(app);
@@ -101,6 +104,12 @@ export async function start(id: number, disconnect: () => void) {
   // must happen before the services add upgrade handlers of their own
   onupgrade(server);
 
+  // The admin service exposes internal queue state without authentication,
+  // so it is restricted to non-production environments.
+  if (env.SERVICES.includes("admin") && env.isProduction) {
+    throw new Error("The admin service cannot be run with NODE_ENV=production");
+  }
+
   // loop through requested services at startup
   for (const name of env.SERVICES) {
     if (!Object.keys(services).includes(name)) {
@@ -113,6 +122,28 @@ export async function start(id: number, disconnect: () => void) {
   }
 
   rejectUnhandledUpgrades(server);
+
+  // While the server is stopping, close keep-alive connections once their
+  // in-flight responses are sent. Added after the services so that requests
+  // intercepted by engine.io are included.
+  const pendingResponses = new WeakMap<Socket, number>();
+
+  server.on(
+    "request",
+    (req: http.IncomingMessage, res: http.ServerResponse) => {
+      const { socket } = req;
+      pendingResponses.set(socket, (pendingResponses.get(socket) ?? 0) + 1);
+
+      res.once("finish", () => {
+        const pending = (pendingResponses.get(socket) ?? 1) - 1;
+        pendingResponses.set(socket, pending);
+
+        if (pending === 0 && !server.listening) {
+          socket.end();
+        }
+      });
+    }
+  );
 
   server.on("error", (err) => {
     if ("code" in err && err.code === "EADDRINUSE") {
@@ -157,17 +188,23 @@ export async function start(id: number, disconnect: () => void) {
     "server",
     ShutdownOrder.last,
     () =>
-      new Promise((resolve, reject) => {
-        // Calling stop prevents new connections from being accepted and waits for
-        // existing connections to close for the grace period before forcefully
-        // closing them.
-        server.stop((err, gracefully) => {
+      new Promise<void>((resolve, reject) => {
+        // Connections that are still open after the grace period are destroyed.
+        const timeout = setTimeout(
+          () => server.closeAllConnections(),
+          ShutdownHelper.connectionGraceTimeout
+        );
+
+        // Stop accepting new connections and close idle ones, the callback is
+        // called once all remaining connections have closed.
+        server.close((err) => {
+          clearTimeout(timeout);
           disconnect();
 
           if (err) {
             reject(err);
           } else {
-            resolve(gracefully);
+            resolve();
           }
         });
       })
