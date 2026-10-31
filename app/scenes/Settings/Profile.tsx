@@ -24,7 +24,7 @@ const Profile = () => {
   const form = React.useRef<HTMLFormElement>(null);
   const [name, setName] = React.useState<string>(user.name);
   const { t } = useTranslation();
-  const canChangeEmail = env.EMAIL_ENABLED && env.AUTH_TYPE !== AUTH_TYPE_SSO;
+  const canChangeEmail = env.AUTH_TYPE !== AUTH_TYPE_SSO;
 
   const handleSubmit = async (ev: React.SyntheticEvent) => {
     ev.preventDefault();
@@ -83,7 +83,7 @@ const Profile = () => {
           />
         </SettingRow>
         <SettingRow
-          border={canChangeEmail}
+          border={env.EMAIL_ENABLED}
           label={t("Name")}
           name="name"
           description={t(
@@ -101,13 +101,13 @@ const Profile = () => {
           />
         </SettingRow>
 
-        {canChangeEmail && (
+        {env.EMAIL_ENABLED && (
           <SettingRow border={false} label={t("Email address")} name="email">
             <Input
               type="email"
               value={user.email}
               readOnly
-              onClick={handleChangeEmail}
+              onClick={canChangeEmail ? handleChangeEmail : undefined}
             />
           </SettingRow>
         )}
