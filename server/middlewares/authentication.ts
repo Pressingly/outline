@@ -74,13 +74,15 @@ export default function auth(options: AuthenticationOptions = {}) {
     }
 
     try {
-      const { type, token, user, service, scope } =
+      const { type, token, user, service, scope, transport } =
         await validateAuthentication(ctx, options);
 
-      // On the first ForwardAuth-authenticated request, issue a JWT cookie so
-      // that subsequent requests and cookie-dependent services (WebSocket,
+      // Only a proxy-asserted identity earns a session cookie, so that
+      // subsequent requests and cookie-dependent services (WebSocket,
       // collaboration) use the fast JWT path instead of the header DB path.
-      if (service === FORWARDAUTH_SERVICE && !ctx.cookies.get("accessToken")) {
+      // A forwardauth session JWT replayed as a Bearer token must not be able
+      // to mint itself a fresh long-lived cookie.
+      if (transport === "proxy") {
         const expires = addDays(new Date(), JWT_COOKIE_TTL_DAYS);
         ctx.cookies.set("accessToken", user.getSessionToken(expires, service), {
           sameSite: "lax",
@@ -354,6 +356,7 @@ async function validateAuthentication(
   type: AuthenticationType;
   service?: string;
   scope?: string[];
+  transport?: AuthTransport;
 }> {
   const { token, transport } = parseAuthentication(ctx);
 
@@ -664,5 +667,6 @@ async function validateAuthentication(
     token,
     service,
     scope,
+    transport,
   };
 }
