@@ -55,6 +55,60 @@ describe("policies/user", () => {
     });
   });
 
+  describe("updateEmail", () => {
+    it("should allow users to change their own email by default", async () => {
+      const user = await buildUser();
+      const abilities = serialize(user, user);
+      expect(abilities.updateEmail).toBe(true);
+    });
+
+    it("should allow admins to change other users' email by default", async () => {
+      const admin = await buildAdmin();
+      const user = await buildUser({ teamId: admin.teamId });
+      const abilities = serialize(admin, user);
+      expect(abilities.updateEmail).toBe(true);
+    });
+
+    it("should not allow members to change other users' email", async () => {
+      const user = await buildUser();
+      const other = await buildUser({ teamId: user.teamId });
+      const abilities = serialize(user, other);
+      expect(abilities.updateEmail).toBe(false);
+    });
+
+    describe("when AUTH_TYPE is SSO", () => {
+      let originalAuthType: string | undefined;
+
+      beforeEach(() => {
+        originalAuthType = env.AUTH_TYPE;
+        env.AUTH_TYPE = AUTH_TYPE_SSO;
+      });
+
+      afterEach(() => {
+        env.AUTH_TYPE = originalAuthType;
+      });
+
+      it("should not allow users to change their own email", async () => {
+        const user = await buildUser();
+        const abilities = serialize(user, user);
+        expect(abilities.updateEmail).toBe(false);
+      });
+
+      it("should not allow admins to change other users' email", async () => {
+        const admin = await buildAdmin();
+        const user = await buildUser({ teamId: admin.teamId });
+        const abilities = serialize(admin, user);
+        expect(abilities.updateEmail).toBe(false);
+      });
+
+      it("should still allow users to update the rest of their profile", async () => {
+        const user = await buildUser();
+        const abilities = serialize(user, user);
+        expect(abilities.update).toBeTruthy();
+      });
+    });
+  });
+
   describe("readEmail", () => {
     it("should allow user to read their own email", async () => {
       const team = await buildTeam();
@@ -256,6 +310,62 @@ describe("policies/user", () => {
       await user1.reload({ include: [{ association: "team" }] });
 
       const abilities = serialize(user1, user2);
+      expect(abilities.readEmail).toBeFalsy();
+    });
+  });
+
+  describe("readEmail on team", () => {
+    it("should allow members when emailDisplay is 'members'", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+
+      const abilities = serialize(user, team);
+      expect(abilities.readEmail).toBeTruthy();
+    });
+
+    it("should NOT allow viewers when emailDisplay is 'members'", async () => {
+      const team = await buildTeam();
+      const viewer = await buildViewer({ teamId: team.id });
+
+      const abilities = serialize(viewer, team);
+      expect(abilities.readEmail).toBeFalsy();
+    });
+
+    it("should NOT allow members when emailDisplay is 'none'", async () => {
+      const team = await buildTeam();
+      team.setPreference(TeamPreference.EmailDisplay, EmailDisplay.None);
+      await team.save();
+      const user = await buildUser({ teamId: team.id });
+
+      const abilities = serialize(user, team);
+      expect(abilities.readEmail).toBeFalsy();
+    });
+
+    it("should allow admins when emailDisplay is 'none'", async () => {
+      const team = await buildTeam();
+      team.setPreference(TeamPreference.EmailDisplay, EmailDisplay.None);
+      await team.save();
+      const admin = await buildAdmin({ teamId: team.id });
+
+      const abilities = serialize(admin, team);
+      expect(abilities.readEmail).toBeTruthy();
+    });
+
+    it("should allow viewers when emailDisplay is 'everyone'", async () => {
+      const team = await buildTeam();
+      team.setPreference(TeamPreference.EmailDisplay, EmailDisplay.Everyone);
+      await team.save();
+      const viewer = await buildViewer({ teamId: team.id });
+
+      const abilities = serialize(viewer, team);
+      expect(abilities.readEmail).toBeTruthy();
+    });
+
+    it("should NOT allow users from a different team", async () => {
+      const team = await buildTeam();
+      const user = await buildUser();
+
+      const abilities = serialize(user, team);
       expect(abilities.readEmail).toBeFalsy();
     });
   });

@@ -1,8 +1,9 @@
+import type { Transition } from "framer-motion";
 import { m } from "framer-motion";
 import { observer } from "mobx-react";
 import * as React from "react";
 import styled, { useTheme } from "styled-components";
-import breakpoint from "styled-components-breakpoint";
+import { breakpoint } from "@shared/styles/breakpoint";
 import { depths, s } from "@shared/styles";
 import ErrorBoundary from "~/components/ErrorBoundary";
 import ResizeBorder from "~/components/Sidebar/components/ResizeBorder";
@@ -80,7 +81,7 @@ function Aside({ children, border, className, skipInitialAnimation }: Props) {
 
   // Resizing tracks the pointer exactly, otherwise width changes spring – which also animates the
   // snap back to the maximum or minimum when released from a stretched position.
-  const transition = isResizing
+  const transition: Transition = isResizing
     ? { duration: 0 }
     : {
         type: "spring",

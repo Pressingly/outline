@@ -6,6 +6,7 @@ import {
   TOCPosition,
   UserRole,
 } from "@shared/types";
+import { validateColorHex } from "@shared/utils/color";
 import { TeamValidation } from "@shared/validations";
 import { BaseSchema } from "@server/routes/api/schema";
 
@@ -63,8 +64,8 @@ export const TeamsUpdateSchema = BaseSchema.extend({
         /** The custom theme for the team. */
         [TeamPreference.CustomTheme]: z
           .strictObject({
-            accent: z.string().min(4).max(7).regex(/^#/),
-            accentText: z.string().min(4).max(7).regex(/^#/),
+            accent: z.string().min(4).max(7).refine(validateColorHex),
+            accentText: z.string().min(4).max(7).refine(validateColorHex),
           })
           .partial(),
         /** Side to display the document's table of contents in relation to the main content. */
@@ -77,6 +78,8 @@ export const TeamsUpdateSchema = BaseSchema.extend({
         [TeamPreference.MCP]: z.boolean(),
         /** List of disabled embed provider titles. */
         [TeamPreference.DisabledEmbeds]: z.array(z.string()),
+        /** Whether users can create documents in a personal collection. */
+        [TeamPreference.PersonalDocs]: z.boolean(),
       })
       .partial()
       .optional(),
@@ -92,3 +95,12 @@ export const TeamsDeleteSchema = BaseSchema.extend({
 });
 
 export type TeamsDeleteSchemaReq = z.infer<typeof TeamsDeleteSchema>;
+
+export const TeamsCreateSchema = BaseSchema.extend({
+  body: z.object({
+    /** Name of the new team */
+    name: z.string(),
+  }),
+});
+
+export type TeamsCreateSchemaReq = z.infer<typeof TeamsCreateSchema>;
