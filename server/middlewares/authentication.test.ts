@@ -913,8 +913,7 @@ describe("Authentication middleware", () => {
 
         try {
           await auth()(
-            {
-              // @ts-expect-error mock request
+            buildMockContext({
               request: {
                 get: vi.fn(
                   (header: string) => headers[header.toLowerCase()] ?? ""
@@ -922,7 +921,6 @@ describe("Authentication middleware", () => {
                 body,
                 query,
               },
-              // @ts-expect-error mock cookies
               cookies: {
                 get: vi.fn((key: string) =>
                   key === "accessToken" ? cookie : undefined
@@ -932,7 +930,7 @@ describe("Authentication middleware", () => {
               state,
               ip: "127.0.0.1",
               cache: {},
-            },
+            }),
             vi.fn()
           );
         } catch (e) {
