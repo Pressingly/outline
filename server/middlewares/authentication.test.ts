@@ -538,6 +538,62 @@ describe("Authentication middleware", () => {
       expect(ageMs).toBeLessThan(expectedMs + 60_000);
     });
 
+    describe("session cookie issuance", () => {
+      async function authenticateWithHeaders(headers: Record<string, string>) {
+        const state = {} as DefaultState;
+        const cookiesSet = vi.fn();
+
+        await auth()(
+          buildMockContext({
+            request: {
+              get: vi.fn(
+                (header: string) => headers[header.toLowerCase()] ?? ""
+              ),
+            },
+            cookies: { get: vi.fn(() => undefined), set: cookiesSet },
+            state,
+            ip: "127.0.0.1",
+            cache: {},
+          }),
+          vi.fn()
+        );
+
+        const cookieNames = cookiesSet.mock.calls.map((call) => call[0]);
+        return { state, cookieNames };
+      }
+
+      it("should issue session cookies on the proxy transport", async () => {
+        const user = await buildUser();
+
+        const { state, cookieNames } = await authenticateWithHeaders({
+          "x-auth-request-email": user.email!,
+        });
+
+        expect(state.auth.user.id).toEqual(user.id);
+        expect(cookieNames).toEqual(
+          expect.arrayContaining(["accessToken", "lastSignedIn"])
+        );
+      });
+
+      it("should not issue a cookie for a forwardauth session JWT sent as Bearer", async () => {
+        const user = await buildUser();
+        const expiresSoon = new Date(Date.now() + 60 * 60 * 1000);
+        const forwardAuthJwt = user.getSessionToken(
+          expiresSoon,
+          FORWARDAUTH_SERVICE
+        );
+
+        const { state, cookieNames } = await authenticateWithHeaders({
+          authorization: `Bearer ${forwardAuthJwt}`,
+          "x-auth-request-email": user.email!,
+        });
+
+        expect(state.auth.user.id).toEqual(user.id);
+        expect(state.auth.service).toEqual(FORWARDAUTH_SERVICE);
+        expect(cookieNames).toEqual([]);
+      });
+    });
+
     it("should provision a new user when X-Auth-Request-Email is unknown", async () => {
       await buildTeam();
       const state = {} as DefaultState;
@@ -814,6 +870,7 @@ describe("Authentication middleware", () => {
       const state = {} as DefaultState;
       const authMiddleware = auth();
       const userJwt = user.getSessionToken();
+      const cookiesSet = vi.fn();
 
       await authMiddleware(
         {
@@ -834,7 +891,7 @@ describe("Authentication middleware", () => {
               }
               return undefined;
             }),
-            set: vi.fn(),
+            set: cookiesSet,
           },
           state,
           ip: "127.0.0.1",
@@ -844,6 +901,7 @@ describe("Authentication middleware", () => {
       );
 
       expect(state.auth.user.id).toEqual(user.id);
+      expect(cookiesSet).not.toHaveBeenCalled();
     });
 
     it("should treat case- and whitespace-variant proxy email as matching the JWT user", async () => {

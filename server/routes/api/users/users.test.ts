@@ -1359,6 +1359,65 @@ describe("#users.updateEmail", () => {
       expect(user.email).toEqual(previousEmail);
     });
   });
+
+  describe("when AUTH_TYPE is SSO", () => {
+    let originalAuthType: string | undefined;
+
+    beforeEach(() => {
+      originalAuthType = env.AUTH_TYPE;
+      env.AUTH_TYPE = AUTH_TYPE_SSO;
+    });
+
+    afterEach(() => {
+      env.AUTH_TYPE = originalAuthType;
+    });
+
+    it("should not allow users to request an email change", async () => {
+      const spy = vi.spyOn(ConfirmUpdateEmail.prototype, "schedule");
+      onTestFinished(() => spy.mockRestore());
+      const user = await buildUser();
+      const res = await server.post("/api/users.updateEmail", user, {
+        body: {
+          email: faker.internet.email(),
+        },
+      });
+
+      expect(res.status).toEqual(403);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("should not allow admins to request an email change for others", async () => {
+      const spy = vi.spyOn(ConfirmUpdateEmail.prototype, "schedule");
+      onTestFinished(() => spy.mockRestore());
+      const admin = await buildAdmin();
+      const user = await buildUser({ teamId: admin.teamId });
+      const res = await server.post("/api/users.updateEmail", admin, {
+        body: {
+          id: user.id,
+          email: faker.internet.email(),
+        },
+      });
+
+      expect(res.status).toEqual(403);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("should not apply a confirmed email change", async () => {
+      const user = await buildUser();
+      const previousEmail = user.email;
+      const res = await server.get(
+        `/api/users.updateEmail?code=${user.getEmailUpdateToken(
+          faker.internet.email()
+        )}&follow=true`,
+        user,
+        { redirect: "manual" }
+      );
+
+      expect(res.status).toEqual(403);
+      await user.reload();
+      expect(user.email).toEqual(previousEmail);
+    });
+  });
 });
 
 describe("#users.update_role", () => {
