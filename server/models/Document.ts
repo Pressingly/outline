@@ -1,4 +1,3 @@
-/* oxlint-disable lines-between-class-members */
 import { compact, isNil, uniq } from "es-toolkit/compat";
 import type {
   Identifier,
@@ -56,7 +55,7 @@ import { DocumentPreferenceDefaults } from "@shared/constants";
 import { ProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
 import { UrlHelper } from "@shared/utils/UrlHelper";
 import slugify from "@shared/utils/slugify";
-import { DocumentValidation } from "@shared/validations";
+import { DeprecationValidation, DocumentValidation } from "@shared/validations";
 import { InvalidRequestError, ValidationError } from "@server/errors";
 import { CacheHelper } from "@server/utils/CacheHelper";
 import { RedisPrefixHelper } from "@server/utils/RedisPrefixHelper";
@@ -70,6 +69,7 @@ import GroupUser from "./GroupUser";
 import Import from "./Import";
 import Relationship from "./Relationship";
 import Revision from "./Revision";
+import Share from "./Share";
 import Star from "./Star";
 import Team from "./Team";
 import User from "./User";
@@ -98,6 +98,15 @@ const stateIfContentEmpty: ProjectionAlias = [
   "state",
 ];
 
+// The markdown text column is only needed to deserialize documents that have
+// neither content nor state.
+const textIfContentAndStateEmpty: ProjectionAlias = [
+  Sequelize.literal(
+    `CASE WHEN document.content IS NULL AND document.state IS NULL THEN document.text ELSE NULL END`
+  ),
+  "text",
+];
+
 type AdditionalFindOptions = {
   /** The user ID to load associated permissions for. */
   userId?: string;
@@ -124,6 +133,20 @@ interface QueryGeneratorWithWhere {
   ): string;
 }
 
+// Documents that are visible by default: published, not a template, and not
+// created as part of a trial.
+const publishedWhere: WhereOptions<Document> = {
+  publishedAt: {
+    [Op.ne]: null,
+  },
+  sourceMetadata: {
+    trial: {
+      [Op.is]: null,
+    },
+  },
+  template: false,
+};
+
 @DefaultScope(() => ({
   include: [
     {
@@ -137,27 +160,26 @@ interface QueryGeneratorWithWhere {
       paranoid: false,
     },
   ],
-  where: {
-    publishedAt: {
-      [Op.ne]: null,
-    },
-    sourceMetadata: {
-      trial: {
-        [Op.is]: null,
-      },
-    },
-    template: false,
-  },
+  where: publishedWhere,
   attributes: {
     exclude: ["state"],
     include: [stateIfContentEmpty],
   },
 }))
 @Scopes(() => ({
+  published: {
+    where: publishedWhere,
+  },
   withoutState: {
     attributes: {
       exclude: ["state"],
       include: [stateIfContentEmpty],
+    },
+  },
+  withoutStateOrText: {
+    attributes: {
+      exclude: ["state", "text"],
+      include: [stateIfContentEmpty, textIfContentAndStateEmpty],
     },
   },
   withoutContent: {
@@ -330,6 +352,11 @@ class Document extends ArchivableModel<
   @SkipChangeset
   summary: string;
 
+  /** The reason this document is archived or deleted. */
+  @Length({ max: DeprecationValidation.maxReasonLength })
+  @Column(DataType.TEXT)
+  deprecatedReason: string | null;
+
   @Column(DataType.ARRAY(DataType.STRING))
   previousTitles: string[];
 
@@ -385,9 +412,10 @@ class Document extends ArchivableModel<
   text: string;
 
   /** The likely language of the content, in ISO 639-1 format. */
+  @AllowNull
   @Length({ max: 2, msg: "language must be an ISO 639-1 code" })
   @Column(DataType.STRING(2))
-  language: string;
+  language: string | null;
 
   /**
    * The content of the document as JSON, this is a snapshot at the last time the state was saved.
@@ -466,7 +494,7 @@ class Document extends ArchivableModel<
    * @returns Redis key for collaborators
    */
   static getCollaboratorKey(documentId: string) {
-    return `collaborators:${documentId}`;
+    return `collaborators:v2:${documentId}`;
   }
 
   static getPath({ title, urlId }: { title: string; urlId: string }) {
@@ -878,7 +906,7 @@ class Document extends ArchivableModel<
   ) {
     return this.scope([
       options?.includeDrafts ? "withDrafts" : "defaultScope",
-      "withoutState",
+      "withoutStateOrText",
       {
         method: ["withViews", userId],
       },
@@ -910,6 +938,13 @@ class Document extends ArchivableModel<
       AdditionalFindOptions = {}
   ): Promise<Document | null> {
     if (typeof id !== "string") {
+      if (options.rejectOnEmpty) {
+        throw options.rejectOnEmpty instanceof Error
+          ? options.rejectOnEmpty
+          : new EmptyResultError(
+              `Document doesn't exist with id: ${String(id)}`
+            );
+      }
       return null;
     }
 
@@ -943,44 +978,34 @@ class Document extends ArchivableModel<
       },
     ]);
 
+    let document: Document | null = null;
+    const match = id.match(UrlHelper.SLUG_URL_REGEX);
+
     if (isUUID(id)) {
-      const document = await scope.findOne({
+      document = await scope.findOne({
         ...rest,
         where: {
           id,
         },
         rejectOnEmpty: false,
       });
-
-      if (!document && rest.rejectOnEmpty) {
-        throw rest.rejectOnEmpty instanceof Error
-          ? rest.rejectOnEmpty
-          : new EmptyResultError(`Document doesn't exist with id: ${id}`);
-      }
-
-      return document;
-    }
-
-    const match = id.match(UrlHelper.SLUG_URL_REGEX);
-    if (match) {
-      const document = await scope.findOne({
+    } else if (match) {
+      document = await scope.findOne({
         ...rest,
         where: {
           urlId: match[1],
         },
         rejectOnEmpty: false,
       });
-
-      if (!document && rest.rejectOnEmpty) {
-        throw rest.rejectOnEmpty instanceof Error
-          ? rest.rejectOnEmpty
-          : new EmptyResultError(`Document doesn't exist with id: ${id}`);
-      }
-
-      return document;
     }
 
-    return null;
+    if (!document && rest.rejectOnEmpty) {
+      throw rest.rejectOnEmpty instanceof Error
+        ? rest.rejectOnEmpty
+        : new EmptyResultError(`Document doesn't exist with id: ${id}`);
+    }
+
+    return document;
   }
 
   /**
@@ -1097,7 +1122,7 @@ class Document extends ArchivableModel<
    *
    * @returns boolean
    */
-  get titleWithDefault(): string {
+  get displayTitle(): string {
     return this.title || "Untitled";
   }
 
@@ -1214,6 +1239,46 @@ class Document extends ArchivableModel<
     return rows.map((row) => row.id);
   };
 
+  /**
+   * Calculate all parent document ids for this document by recursively
+   * following parentDocumentId references in one query.
+   *
+   * @param options the query options.
+   * @returns a promise that resolves to parent document ids, nearest first.
+   */
+  findAllParentDocumentIds = async (
+    options?: FindOptions<Document>
+  ): Promise<string[]> => {
+    if (!this.parentDocumentId) {
+      return [];
+    }
+
+    const paranoid = options?.paranoid ?? true;
+    const rows = await this.sequelize!.query<{ id: string }>(
+      `
+      WITH RECURSIVE parents AS (
+        SELECT documents.id, documents."parentDocumentId", 1 AS depth
+        FROM documents
+        WHERE documents.id = :parentDocumentId
+          ${paranoid ? 'AND documents."deletedAt" IS NULL' : ""}
+        UNION ALL
+        SELECT documents.id, documents."parentDocumentId", parents.depth + 1
+        FROM documents
+        INNER JOIN parents ON documents.id = parents."parentDocumentId"
+        ${paranoid ? 'WHERE documents."deletedAt" IS NULL' : ""}
+      )
+      SELECT id FROM parents ORDER BY depth
+      `,
+      {
+        replacements: { parentDocumentId: this.parentDocumentId },
+        transaction: options?.transaction,
+        type: QueryTypes.SELECT,
+      }
+    );
+
+    return rows.map((row) => row.id);
+  };
+
   publish = async (
     ctx: APIContext,
     {
@@ -1248,6 +1313,17 @@ class Document extends ArchivableModel<
 
     if (!this.collectionId) {
       this.collectionId = collectionId;
+    }
+
+    // A parent outside the destination collection is stale, so publish at the root.
+    if (this.parentDocumentId && this.collectionId) {
+      const parentDocument = await Document.unscoped().findByPk(
+        this.parentDocumentId,
+        { attributes: ["collectionId"], transaction }
+      );
+      if (parentDocument?.collectionId !== this.collectionId) {
+        this.parentDocumentId = null;
+      }
     }
 
     if (this.collectionId) {
@@ -1360,6 +1436,20 @@ class Document extends ArchivableModel<
 
     if (options.detach) {
       this.collectionId = null;
+      this.parentDocumentId = null;
+    }
+
+    // Withdrawing the document also disables its public share links.
+    const shares = await Share.findAll({
+      where: {
+        documentId: this.id,
+        published: true,
+        revokedAt: { [Op.is]: null },
+      },
+      transaction,
+    });
+    for (const share of shares) {
+      await share.updateWithCtx(ctx, { published: false });
     }
 
     return this.saveWithCtx(ctx, undefined, { name: "unpublish" });
@@ -1425,6 +1515,8 @@ class Document extends ArchivableModel<
 
     if (this.deletedAt) {
       await this.restore({ transaction });
+      this.deprecatedReason = null;
+      this.changed("deprecatedReason", true);
       this.collectionId = collectionId;
       await this.saveWithCtx(ctx, undefined, { name: "restore" });
     }
@@ -1500,44 +1592,82 @@ class Document extends ArchivableModel<
   toNavigationNode = async (
     options?: FindOptions<Document> & { includeArchived?: boolean }
   ): Promise<NavigationNode> => {
+    const root = this.toShallowNavigationNode();
+
     // Checking if the record is new is a performance optimization – new docs cannot have children
-    const childDocuments = this.isNewRecord
-      ? []
-      : await (this.constructor as typeof Document).unscoped().findAll({
-          where: options?.includeArchived
-            ? {
-                teamId: this.teamId,
-                parentDocumentId: this.id,
-                publishedAt: {
-                  [Op.ne]: null,
-                },
-              }
-            : {
-                teamId: this.teamId,
-                parentDocumentId: this.id,
-                publishedAt: {
-                  [Op.ne]: null,
-                },
-                archivedAt: {
-                  [Op.is]: null,
-                },
-              },
+    if (this.isNewRecord) {
+      return root;
+    }
+
+    // Load the subtree one level at a time, selecting only the columns that
+    // the navigation node needs.
+    const visited = new Set([this.id]);
+    let parents = new Map([[this.id, root]]);
+
+    while (parents.size > 0) {
+      const childDocuments = await (this.constructor as typeof Document)
+        .unscoped()
+        .findAll({
+          attributes: [
+            "id",
+            "title",
+            "urlId",
+            "icon",
+            "color",
+            "parentDocumentId",
+          ],
+          where: {
+            teamId: this.teamId,
+            parentDocumentId: Array.from(parents.keys()),
+            publishedAt: {
+              [Op.ne]: null,
+            },
+            ...(options?.includeArchived
+              ? {}
+              : {
+                  archivedAt: {
+                    [Op.is]: null,
+                  },
+                }),
+          },
           transaction: options?.transaction,
         });
 
-    const children = await Promise.all(
-      childDocuments.map((child) => child.toNavigationNode(options))
-    );
+      const nextParents = new Map<string, NavigationNode>();
 
-    return {
-      id: this.id,
-      title: this.title,
-      url: this.url,
-      icon: isNil(this.icon) ? undefined : this.icon,
-      color: isNil(this.color) ? undefined : this.color,
-      children,
-    };
+      for (const child of childDocuments) {
+        if (visited.has(child.id) || !child.parentDocumentId) {
+          continue;
+        }
+        visited.add(child.id);
+
+        const node = child.toShallowNavigationNode();
+        parents.get(child.parentDocumentId)?.children.push(node);
+        nextParents.set(child.id, node);
+      }
+
+      parents = nextParents;
+    }
+
+    return root;
   };
+
+  /**
+   * Returns a NavigationNode for this document without loading its children.
+   *
+   * @param children the child nodes to include.
+   * @returns the NavigationNode.
+   */
+  toShallowNavigationNode = (
+    children: NavigationNode[] = []
+  ): NavigationNode => ({
+    id: this.id,
+    title: this.title,
+    url: this.url,
+    icon: isNil(this.icon) ? undefined : this.icon,
+    color: isNil(this.color) ? undefined : this.color,
+    children,
+  });
 
   private restoreArchivedWithChildren = async (
     ctx: APIContext,
@@ -1558,6 +1688,8 @@ class Document extends ArchivableModel<
       for (const child of childDocuments) {
         await restoreChildren(child.id);
         child.archivedAt = null;
+        child.deprecatedReason = null;
+        child.changed("deprecatedReason", true);
         child.lastModifiedById = user.id;
         child.updatedBy = user;
         child.collectionId = collectionId;
@@ -1567,6 +1699,8 @@ class Document extends ArchivableModel<
 
     await restoreChildren(this.id);
     this.archivedAt = null;
+    this.deprecatedReason = null;
+    this.changed("deprecatedReason", true);
     this.lastModifiedById = user.id;
     this.updatedBy = user;
     this.collectionId = collectionId;

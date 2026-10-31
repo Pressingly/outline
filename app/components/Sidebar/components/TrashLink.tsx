@@ -1,12 +1,12 @@
 import { observer } from "mobx-react";
 import { TrashIcon } from "outline-icons";
-import { useDrop } from "react-dnd";
 import { useTranslation } from "react-i18next";
 import DocumentDelete from "~/scenes/DocumentDelete";
 import { DialogTitle } from "~/components/DialogTitle";
 import useStores from "~/hooks/useStores";
 import * as Scenes from "~/routes/scenes";
 import { trashPath } from "~/utils/routeHelpers";
+import { useDropRef } from "~/components/DragAndDrop";
 import type { DragObject } from "../hooks/useDragAndDrop";
 import SidebarLink from "./SidebarLink";
 
@@ -14,7 +14,7 @@ function TrashLink() {
   const { policies, dialogs, documents } = useStores();
   const { t } = useTranslation();
 
-  const [{ isDocumentDropping }, dropToTrashRef] = useDrop({
+  const [{ isDocumentDropping }, dropToTrashRef] = useDropRef({
     accept: "document",
     drop: async (item: DragObject) => {
       const document = documents.get(item.id);

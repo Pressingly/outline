@@ -36,6 +36,7 @@ import type { MarkdownSerializerState } from "../lib/markdown/serializer";
 import { PlaceholderPlugin } from "../plugins/PlaceholderPlugin";
 import { findBlockNodes } from "../queries/findChildren";
 import { findCutAfterHeading } from "../queries/findCutAfterHeading";
+import { isInlineTransaction } from "../queries/isInlineTransaction";
 import { isNodeActive } from "../queries/isNodeActive";
 import toggleBlocksRule from "../rules/toggleBlocks";
 import { EditorStyleHelper } from "../styles/EditorStyleHelper";
@@ -54,8 +55,8 @@ export enum Action {
 
 interface FoldAction {
   type: Action;
-  /** Position of the target block; omitted to target every toggle block. */
-  at?: number;
+  /** Position of the target blocks; omitted to target every toggle block. */
+  at?: number | number[];
   /** Whether toggle blocks nested inside the target are included. */
   nested?: boolean;
 }
@@ -71,6 +72,8 @@ export const toggleFoldPluginKey = new PluginKey<ToggleFoldState>("toggleFold");
 
 /** Plugin key for toggle block fold/unfold events. */
 export const toggleEventPluginKey = new PluginKey("toggleBlockEvent");
+
+const toggleIdPluginKey = new PluginKey<boolean>("toggleBlockIds");
 
 /** Build the localStorage key used to persist a toggle block's fold state. */
 export const toggleStorageKey = (id: string) => `toggle:${id}`;
@@ -117,9 +120,25 @@ export default class ToggleBlock extends Node {
 
   get plugins() {
     // Assign IDs and auto-fold empty
-    const plugin = new Plugin({
-      appendTransaction: (transactions, _oldState, newState) => {
+    const plugin = new Plugin<boolean>({
+      key: toggleIdPluginKey,
+      state: {
+        // Whether any document change has been applied since load
+        init: () => false,
+        apply: (tr, hasChanged) => hasChanged || tr.docChanged,
+      },
+      appendTransaction: (transactions, oldState, newState) => {
         if (!transactions.some((tr) => tr.docChanged)) {
+          return null;
+        }
+
+        // Blocks loaded without ids are repaired on the first edit. After
+        // that only structural edits can add toggle blocks or empty bodies.
+        const isFirstChange = !toggleIdPluginKey.getState(oldState);
+        if (
+          !isFirstChange &&
+          !transactions.some((tr) => this.isStructuralChange(tr, newState))
+        ) {
           return null;
         }
 
@@ -187,20 +206,23 @@ export default class ToggleBlock extends Node {
         },
 
         apply: (tr, pluginState, _oldState, newState) => {
-          if (isRemoteTransaction(tr, newState)) {
-            return this.reconcileFoldState(pluginState, newState.doc);
-          }
-
           const action = tr.getMeta(toggleFoldPluginKey);
 
-          // No action - just map decorations through the transaction
           if (!action) {
             if (!tr.docChanged) {
               return pluginState;
             }
 
-            // Always rebuild decorations to ensure head positions are correct
-            // (mapping can produce incorrect positions when first child changes)
+            // Inline edits only shift positions, so mapping is enough. Any
+            // other change may add, remove, or split toggle blocks and
+            // their heads, so the decorations are rebuilt from the document.
+            if (!this.isStructuralChange(tr, newState)) {
+              return {
+                ...pluginState,
+                decorations: pluginState.decorations.map(tr.mapping, tr.doc),
+              };
+            }
+
             return this.reconcileFoldState(pluginState, tr.doc);
           }
 
@@ -471,7 +493,25 @@ export default class ToggleBlock extends Node {
   }
 
   /**
-   * Resolve the toggle blocks an action applies to: the block at the given
+   * Check whether a transaction may change the set of toggle blocks, their
+   * ids, or the bounds of their heads. Local inline edits such as typing do
+   * not. Remote transactions always do, as their steps do not reflect the
+   * shape of the collaborative change.
+   *
+   * @param tr The transaction to inspect.
+   * @param state The editor state after the transaction.
+   * @return true if the toggle block decorations must be rebuilt.
+   */
+  private isStructuralChange(tr: Transaction, state: EditorState): boolean {
+    return (
+      tr.docChanged &&
+      (isRemoteTransaction(tr, state) ||
+        !isInlineTransaction(tr, (node) => node.type.name === this.name))
+    );
+  }
+
+  /**
+   * Resolve the toggle blocks an action applies to: the block at each given
    * position, that block and every toggle block nested inside it when
    * `nested` is set, or every toggle block in the document when no position
    * is given.
@@ -492,6 +532,12 @@ export default class ToggleBlock extends Node {
 
     if (action.at === undefined) {
       return findBlockNodes(doc, true).filter(isToggle);
+    }
+
+    if (Array.isArray(action.at)) {
+      return action.at.flatMap((at) =>
+        this.resolveTargets(doc, { ...action, at })
+      );
     }
 
     const at = action.at;

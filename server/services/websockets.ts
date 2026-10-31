@@ -1,10 +1,10 @@
 import type { IncomingMessage } from "node:http";
 import type http from "node:http";
 import type { Duplex } from "node:stream";
+import { createAdapter } from "@socket.io/redis-adapter";
 import cookie from "cookie";
 import type Koa from "koa";
 import IO from "socket.io";
-import { createAdapter } from "socket.io-redis";
 import { errToId, errToString, toError } from "@shared/utils/error";
 import env from "@server/env";
 import { AuthenticationError } from "@server/errors";
@@ -15,7 +15,7 @@ import { traceFunction } from "@server/logging/tracing";
 import type { User } from "@server/models";
 import { rejectUpgrade } from "@server/onupgrade";
 import Redis from "@server/storage/redis";
-import ShutdownHelper, { ShutdownOrder } from "@server/utils/ShutdownHelper";
+import { ShutdownHelper, ShutdownOrder } from "@server/utils/ShutdownHelper";
 import { getUserForJWT } from "@server/utils/jwt";
 import { websocketQueue } from "../queues";
 import WebsocketsProcessor from "../queues/processors/WebsocketsProcessor";
@@ -89,23 +89,13 @@ export default function init(
   );
 
   ShutdownHelper.add("websockets", ShutdownOrder.normal, async () => {
+    // Close the clients of this process only, upgraded sockets are not closed
+    // by the HTTP server.
+    io.engine.close();
     Metrics.gaugePerInstance("websockets.count", 0);
   });
 
-  io.adapter(
-    createAdapter({
-      pubClient: Redis.defaultClient,
-      subClient: Redis.defaultSubscriber,
-    })
-  );
-
-  io.of("/").adapter.on("error", (err: Error) => {
-    if (err.name === "MaxRetriesPerRequestError") {
-      Logger.fatal("Redis maximum retries exceeded in socketio adapter", err);
-    } else {
-      Logger.error("Redis error in socketio adapter", err);
-    }
-  });
+  io.adapter(createAdapter(Redis.defaultClient, Redis.defaultSubscriber));
 
   io.on("connection", async (socket: SocketWithAuth) => {
     Metrics.increment("websockets.connected");

@@ -233,7 +233,7 @@ export function TeamDomainRequiredError(
 }
 
 export function GmailAccountCreationError(
-  message = "Cannot create account using personal gmail address"
+  message = "Cannot create account using personal Gmail address"
 ) {
   return httpErrors(400, message, {
     id: "gmail_account_creation",
@@ -266,6 +266,15 @@ export function UnprocessableEntityError(
 ) {
   return httpErrors(422, message, {
     id: "unprocessable_entity",
+    isReportable: false,
+  });
+}
+
+export function InvalidClientMetadataError(
+  message = "The client metadata document is invalid"
+) {
+  return httpErrors(422, message, {
+    id: "invalid_client_metadata",
     isReportable: false,
   });
 }
