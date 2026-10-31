@@ -870,6 +870,7 @@ describe("Authentication middleware", () => {
       const state = {} as DefaultState;
       const authMiddleware = auth();
       const userJwt = user.getSessionToken();
+      const cookiesSet = vi.fn();
 
       await authMiddleware(
         {
@@ -890,7 +891,7 @@ describe("Authentication middleware", () => {
               }
               return undefined;
             }),
-            set: vi.fn(),
+            set: cookiesSet,
           },
           state,
           ip: "127.0.0.1",
@@ -900,6 +901,7 @@ describe("Authentication middleware", () => {
       );
 
       expect(state.auth.user.id).toEqual(user.id);
+      expect(cookiesSet).not.toHaveBeenCalled();
     });
 
     it("should treat case- and whitespace-variant proxy email as matching the JWT user", async () => {
