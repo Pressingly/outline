@@ -1320,11 +1320,16 @@ describe("Authentication middleware - mPass edge trust", () => {
   interface EdgeRequest {
     headers?: Record<string, string>;
     cookie?: string;
+    remoteAddress?: string;
   }
 
   const uniqueEmail = () => `${randomString(10).toLowerCase()}@example.com`;
 
-  async function authenticate({ headers = {}, cookie }: EdgeRequest) {
+  async function authenticate({
+    headers = {},
+    cookie,
+    remoteAddress = "172.18.0.9",
+  }: EdgeRequest) {
     const state = {} as DefaultState;
     let error: unknown;
 
@@ -1345,7 +1350,7 @@ describe("Authentication middleware - mPass edge trust", () => {
             set: vi.fn(),
           },
           // @ts-expect-error mock node request
-          req: { socket: { remoteAddress: "172.18.0.9" } },
+          req: { socket: { remoteAddress } },
           path: "/api/auth.info",
           state,
           ip: "127.0.0.1",
@@ -1434,6 +1439,8 @@ describe("Authentication middleware - mPass edge trust", () => {
       const warn = vi.spyOn(Logger, "warn");
       const email = uniqueEmail();
 
+      const remoteAddress = `172.20.${randomString(4)}`;
+
       await authenticate({
         headers: {
           "x-auth-request-email": email,
@@ -1441,6 +1448,7 @@ describe("Authentication middleware - mPass edge trust", () => {
           "x-auth-request-preferred-username": "mpass-123",
           "x-forwarded-for": "10.9.9.9",
         },
+        remoteAddress,
       });
 
       expect(warn).toHaveBeenCalledWith(
@@ -1448,10 +1456,45 @@ describe("Authentication middleware - mPass edge trust", () => {
         {
           mpassId: "mpass-123",
           path: "/api/auth.info",
-          remoteAddr: "172.18.0.9",
+          remoteAddr: remoteAddress,
         }
       );
       expect(JSON.stringify(warn.mock.calls)).not.toContain(email);
+    });
+
+    it("caps the logged mPass id at 64 characters", async () => {
+      const warn = vi.spyOn(Logger, "warn");
+
+      await authenticate({
+        headers: {
+          "x-auth-request-email": uniqueEmail(),
+          "x-auth-request-preferred-username": "m".repeat(500),
+        },
+        remoteAddress: `172.21.${randomString(4)}`,
+      });
+
+      expect(warn).toHaveBeenCalledWith(
+        "mPass identity headers ignored: request lacks the edge secret",
+        expect.objectContaining({ mpassId: "m".repeat(64) })
+      );
+    });
+
+    it("warns once per remote address within a minute", async () => {
+      const warn = vi.spyOn(Logger, "warn");
+      const remoteAddress = `172.22.${randomString(4)}`;
+      const forged = {
+        headers: { "x-auth-request-email": uniqueEmail() },
+        remoteAddress,
+      };
+
+      await authenticate(forged);
+      await authenticate(forged);
+
+      expect(
+        warn.mock.calls.filter(([message]) =>
+          message.startsWith("mPass identity headers ignored")
+        )
+      ).toHaveLength(1);
     });
 
     it("does not end a session on a forged identity switch", async () => {

@@ -23,6 +23,7 @@ import type { AppContext } from "@server/types";
 import { AuthenticationType } from "@server/types";
 import { JWT_COOKIE_TTL_DAYS } from "@server/utils/authentication";
 import { getJWTPayload, getUserForJWT } from "@server/utils/jwt";
+import { LogThrottle } from "@server/utils/LogThrottle";
 import {
   EDGE_SECRET_HEADER,
   requestIsFromEdge,
@@ -322,6 +323,8 @@ const MPASS_ID_HEADERS = [
   "x-auth-request-preferred-username",
 ];
 const ACCESS_TOKEN_HEADER = "x-auth-request-access-token";
+const MAX_LOGGED_MPASS_ID_LENGTH = 64;
+const untrustedHeaderWarnings = new LogThrottle({ intervalMs: 60 * 1000 });
 
 function isFromEdge(ctx: AppContext): boolean {
   return requestIsFromEdge(
@@ -360,26 +363,28 @@ function mpassIdForLogs(ctx: AppContext): string {
   const candidates = MPASS_ID_HEADERS.map((header) =>
     (ctx.request.get(header) ?? "").trim()
   );
-  return candidates.find((value) => value && !value.includes("@")) ?? "-";
+  const mpassId = candidates.find((value) => value && !value.includes("@"));
+  return mpassId ? mpassId.slice(0, MAX_LOGGED_MPASS_ID_LENGTH) : "-";
 }
 
-function requestLogContext(ctx: AppContext) {
-  return {
-    mpassId: mpassIdForLogs(ctx),
-    path: ctx.path,
-    remoteAddr: ctx.req?.socket?.remoteAddress ?? "-",
-  };
+function remoteAddress(ctx: AppContext): string {
+  return ctx.req?.socket?.remoteAddress ?? "-";
 }
 
 function warnOnUntrustedIdentityHeaders(ctx: AppContext): void {
   if (
     env.AUTH_TYPE === AUTH_TYPE_SSO &&
     carriesIdentityHeaders(ctx) &&
-    !isFromEdge(ctx)
+    !isFromEdge(ctx) &&
+    untrustedHeaderWarnings.shouldLog(remoteAddress(ctx))
   ) {
     Logger.warn(
       "mPass identity headers ignored: request lacks the edge secret",
-      requestLogContext(ctx)
+      {
+        mpassId: mpassIdForLogs(ctx),
+        path: ctx.path,
+        remoteAddr: remoteAddress(ctx),
+      }
     );
   }
 }

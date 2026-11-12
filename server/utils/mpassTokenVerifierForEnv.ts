@@ -7,20 +7,31 @@ import {
   configured,
 } from "@server/utils/MpassTokenVerifier";
 
-let current: MpassTokenVerifier | undefined;
+let current: { key: string; verifier: MpassTokenVerifier } | undefined;
+
+function settingsKey(): string {
+  return JSON.stringify([
+    env.MPASS_COGNITO_ISSUER_URL,
+    env.COGNITO_AWS_REGION,
+    env.COGNITO_USER_POOL_ID,
+    env.MPASS_TOKEN_ISSUER_URL,
+    env.MPASS_OIDC_CLIENT_ID,
+  ]);
+}
 
 /**
- * The verifier for the current env. It is rebuilt only when the trusted
- * issuers or client id change, so its JWKS cache survives across requests.
+ * The verifier for the current env. A new one is built only when the token
+ * settings change, so its JWKS and verified-token caches survive across
+ * requests and a gated request allocates nothing.
  *
  * @returns the shared token verifier.
  */
 export function mpassTokenVerifier(): MpassTokenVerifier {
-  const candidate = MpassTokenVerifier.fromSettings(env);
-  if (current?.configurationKey !== candidate.configurationKey) {
-    current = candidate;
+  const key = settingsKey();
+  if (current?.key !== key) {
+    current = { key, verifier: MpassTokenVerifier.fromSettings(env) };
   }
-  return current;
+  return current.verifier;
 }
 
 /**

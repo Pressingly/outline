@@ -43,6 +43,13 @@ describe("requestIsFromEdge", () => {
     expect(requestIsFromEdge(short, short)).toBe(false);
   });
 
+  it("trusts nothing when the configured secret is a CHANGE_ME_ placeholder", () => {
+    const placeholder = `CHANGE_ME_${"x".repeat(40)}`;
+
+    expect(edgeSecretIsUsable(placeholder)).toBe(false);
+    expect(requestIsFromEdge(placeholder, placeholder)).toBe(false);
+  });
+
   it("trusts nothing when no secret is configured", () => {
     expect(requestIsFromEdge("", "")).toBe(false);
   });

@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { configured } from "@server/utils/MpassTokenVerifier";
 
 /** Header Traefik sets on the mPass SSO router to vouch for the request. */
 export const EDGE_SECRET_HEADER = "x-mpass-edge-secret";
@@ -7,13 +8,14 @@ export const EDGE_SECRET_HEADER = "x-mpass-edge-secret";
 export const MIN_EDGE_SECRET_LENGTH = 32;
 
 /**
- * Whether the configured edge secret is long enough to be trusted.
+ * Whether the configured edge secret is long enough to be trusted. A
+ * CHANGE_ME_ placeholder is never trusted, whatever its length.
  *
  * @param secret the configured edge secret.
  * @returns true when identity headers may be trusted with this secret.
  */
 export function edgeSecretIsUsable(secret: string): boolean {
-  return secret.trim().length >= MIN_EDGE_SECRET_LENGTH;
+  return configured(secret).length >= MIN_EDGE_SECRET_LENGTH;
 }
 
 /**
@@ -32,7 +34,7 @@ export function requestIsFromEdge(
   if (!edgeSecretIsUsable(secret) || !presented) {
     return false;
   }
-  return timingSafeEqual(digest(presented), digest(secret.trim()));
+  return timingSafeEqual(digest(presented), digest(configured(secret)));
 }
 
 function digest(value: string): Buffer {
