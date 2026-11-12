@@ -1,9 +1,13 @@
+import { generateKeyPairSync } from "node:crypto";
+import jwt from "jsonwebtoken";
 import type { DefaultState } from "koa";
+import { HttpResponse, http } from "msw";
 import { AUTH_TYPE_SSO } from "@shared/constants";
 import { errToString } from "@shared/utils/error";
 import { randomString } from "@shared/random";
 import { Scope } from "@shared/types";
 import env from "@server/env";
+import Logger from "@server/logging/Logger";
 import {
   buildUser,
   buildTeam,
@@ -13,10 +17,14 @@ import {
 } from "@server/test/factories";
 import { User } from "@server/models";
 import { sequelize } from "@server/storage/database";
+import { server } from "@server/test/msw";
 import { buildMockContext } from "@server/test/support";
 import { AuthenticationType } from "@server/types";
 import { JWT_COOKIE_TTL_DAYS } from "@server/utils/authentication";
+import { EDGE_SECRET_HEADER } from "@server/utils/mpassEdgeTrust";
 import auth, { FORWARDAUTH_SERVICE } from "./authentication";
+
+const EDGE_SECRET = "e".repeat(64);
 
 interface CtxOverrides {
   originalUrl?: string;
@@ -460,10 +468,12 @@ describe("Authentication middleware", () => {
   describe("with ForwardAuth headers", () => {
     beforeEach(() => {
       env.AUTH_TYPE = AUTH_TYPE_SSO;
+      env.MPASS_EDGE_SECRET = EDGE_SECRET;
     });
 
     afterEach(() => {
       env.AUTH_TYPE = undefined;
+      env.MPASS_EDGE_SECRET = "";
     });
 
     it("should authenticate an existing user via X-Auth-Request-Email", async () => {
@@ -477,7 +487,10 @@ describe("Authentication middleware", () => {
           // @ts-expect-error mock request
           request: {
             get: vi.fn((header: string) => {
-              if (header === "x-auth-request-email") {
+              if (header === EDGE_SECRET_HEADER) {
+return EDGE_SECRET;
+}
+if (header === "x-auth-request-email") {
                 return user.email!;
               }
               return "";
@@ -510,7 +523,10 @@ describe("Authentication middleware", () => {
           // @ts-expect-error mock request
           request: {
             get: vi.fn((header: string) => {
-              if (header === "x-auth-request-email") {
+              if (header === EDGE_SECRET_HEADER) {
+return EDGE_SECRET;
+}
+if (header === "x-auth-request-email") {
                 return user.email!;
               }
               return "";
@@ -567,6 +583,7 @@ describe("Authentication middleware", () => {
 
         const { state, cookieNames } = await authenticateWithHeaders({
           "x-auth-request-email": user.email!,
+          [EDGE_SECRET_HEADER]: EDGE_SECRET,
         });
 
         expect(state.auth.user.id).toEqual(user.id);
@@ -586,6 +603,7 @@ describe("Authentication middleware", () => {
         const { state, cookieNames } = await authenticateWithHeaders({
           authorization: `Bearer ${forwardAuthJwt}`,
           "x-auth-request-email": user.email!,
+          [EDGE_SECRET_HEADER]: EDGE_SECRET,
         });
 
         expect(state.auth.user.id).toEqual(user.id);
@@ -605,7 +623,10 @@ describe("Authentication middleware", () => {
           // @ts-expect-error mock request
           request: {
             get: vi.fn((header: string) => {
-              if (header === "x-auth-request-email") {
+              if (header === EDGE_SECRET_HEADER) {
+return EDGE_SECRET;
+}
+if (header === "x-auth-request-email") {
                 return newEmail;
               }
               return "";
@@ -644,7 +665,10 @@ describe("Authentication middleware", () => {
             // @ts-expect-error mock request
             request: {
               get: vi.fn((header: string) => {
-                if (header === "x-auth-request-email") {
+                if (header === EDGE_SECRET_HEADER) {
+return EDGE_SECRET;
+}
+if (header === "x-auth-request-email") {
                   return localPart;
                 }
                 return "";
@@ -679,7 +703,10 @@ describe("Authentication middleware", () => {
             // @ts-expect-error mock request
             request: {
               get: vi.fn((header: string) => {
-                if (header === "x-auth-request-email") {
+                if (header === EDGE_SECRET_HEADER) {
+return EDGE_SECRET;
+}
+if (header === "x-auth-request-email") {
                   return "@example.com";
                 }
                 return "";
@@ -717,7 +744,10 @@ describe("Authentication middleware", () => {
           // @ts-expect-error mock request
           request: {
             get: vi.fn((header: string) => {
-              if (header === "x-auth-request-email") {
+              if (header === EDGE_SECRET_HEADER) {
+return EDGE_SECRET;
+}
+if (header === "x-auth-request-email") {
                 return wildcardEmail;
               }
               return "";
@@ -762,7 +792,10 @@ describe("Authentication middleware", () => {
             // @ts-expect-error mock request
             request: {
               get: vi.fn((header: string) => {
-                if (header === "x-auth-request-email") {
+                if (header === EDGE_SECRET_HEADER) {
+return EDGE_SECRET;
+}
+if (header === "x-auth-request-email") {
                   return newEmail;
                 }
                 return "";
@@ -826,7 +859,10 @@ describe("Authentication middleware", () => {
             // @ts-expect-error mock request
             request: {
               get: vi.fn((header: string) => {
-                if (header === "x-auth-request-email") {
+                if (header === EDGE_SECRET_HEADER) {
+return EDGE_SECRET;
+}
+if (header === "x-auth-request-email") {
                   return bob.email!;
                 }
                 return "";
@@ -877,7 +913,10 @@ describe("Authentication middleware", () => {
           // @ts-expect-error mock request
           request: {
             get: vi.fn((header: string) => {
-              if (header === "x-auth-request-email") {
+              if (header === EDGE_SECRET_HEADER) {
+return EDGE_SECRET;
+}
+if (header === "x-auth-request-email") {
                 return user.email!;
               }
               return "";
@@ -924,7 +963,10 @@ describe("Authentication middleware", () => {
           // @ts-expect-error mock request
           request: {
             get: vi.fn((header: string) => {
-              if (header === "x-auth-request-email") {
+              if (header === EDGE_SECRET_HEADER) {
+return EDGE_SECRET;
+}
+if (header === "x-auth-request-email") {
                 return variantHeader;
               }
               return "";
@@ -974,7 +1016,10 @@ describe("Authentication middleware", () => {
             buildMockContext({
               request: {
                 get: vi.fn(
-                  (header: string) => headers[header.toLowerCase()] ?? ""
+                  (header: string) =>
+                    ({ [EDGE_SECRET_HEADER]: EDGE_SECRET, ...headers })[
+                      header.toLowerCase()
+                    ] ?? ""
                 ),
                 body,
                 query,
@@ -1086,7 +1131,10 @@ describe("Authentication middleware", () => {
             // @ts-expect-error mock request
             request: {
               get: vi.fn((header: string) => {
-                if (header === "x-auth-request-email") {
+                if (header === EDGE_SECRET_HEADER) {
+return EDGE_SECRET;
+}
+if (header === "x-auth-request-email") {
                   return "attacker@example.com";
                 }
                 return "";
@@ -1265,5 +1313,349 @@ describe("Authentication middleware - cookie cleanup regression", () => {
 
     // 🔥 core regression assertion
     expect(err?.headers?.["set-cookie"]).toBeUndefined();
+  });
+});
+
+describe("Authentication middleware - mPass edge trust", () => {
+  interface EdgeRequest {
+    headers?: Record<string, string>;
+    cookie?: string;
+  }
+
+  const uniqueEmail = () => `${randomString(10).toLowerCase()}@example.com`;
+
+  async function authenticate({ headers = {}, cookie }: EdgeRequest) {
+    const state = {} as DefaultState;
+    let error: unknown;
+
+    try {
+      await auth()(
+        {
+          // @ts-expect-error mock request
+          request: {
+            get: vi.fn((header: string) => headers[header.toLowerCase()] ?? ""),
+            body: {},
+            query: {},
+          },
+          // @ts-expect-error mock cookies
+          cookies: {
+            get: vi.fn((key: string) =>
+              key === "accessToken" ? cookie : undefined
+            ),
+            set: vi.fn(),
+          },
+          // @ts-expect-error mock node request
+          req: { socket: { remoteAddress: "172.18.0.9" } },
+          path: "/api/auth.info",
+          state,
+          ip: "127.0.0.1",
+          cache: {},
+        },
+        vi.fn()
+      );
+    } catch (e) {
+      error = e;
+    }
+
+    return { state, error };
+  }
+
+  beforeEach(() => {
+    env.AUTH_TYPE = AUTH_TYPE_SSO;
+    env.MPASS_EDGE_SECRET = EDGE_SECRET;
+  });
+
+  afterEach(() => {
+    env.AUTH_TYPE = undefined;
+    env.MPASS_EDGE_SECRET = "";
+    vi.restoreAllMocks();
+  });
+
+  describe("identity headers", () => {
+    it("logs in a request that came through the edge", async () => {
+      const user = await buildUser({ email: uniqueEmail() });
+
+      const { state, error } = await authenticate({
+        headers: {
+          "x-auth-request-email": user.email!,
+          [EDGE_SECRET_HEADER]: EDGE_SECRET,
+        },
+      });
+
+      expect(error).toBeUndefined();
+      expect(state.auth.user.id).toEqual(user.id);
+      expect(state.auth.service).toEqual(FORWARDAUTH_SERVICE);
+    });
+
+    it.each([
+      ["without the edge secret", {}],
+      ["with a wrong edge secret", { [EDGE_SECRET_HEADER]: "x".repeat(64) }],
+    ])(
+      "ignores a forged header %s and neither logs in nor provisions",
+      async (_label, edgeHeaders) => {
+        const victim = await buildAdmin({ email: uniqueEmail() });
+        const stranger = uniqueEmail();
+
+        const forgedVictim = await authenticate({
+          headers: { "x-auth-request-email": victim.email!, ...edgeHeaders },
+        });
+        const forgedStranger = await authenticate({
+          headers: { "x-auth-request-email": stranger, ...edgeHeaders },
+        });
+
+        expect(forgedVictim.error).toHaveProperty("status", 401);
+        expect(forgedVictim.state.auth).toBeUndefined();
+        expect(forgedStranger.error).toHaveProperty("status", 401);
+        expect(await User.count({ where: { email: stranger } })).toBe(0);
+      }
+    );
+
+    it.each([
+      ["unset", ""],
+      ["shorter than 32 characters", "s".repeat(31)],
+    ])(
+      "trusts no identity header when the configured secret is %s",
+      async (_label, secret) => {
+        env.MPASS_EDGE_SECRET = secret;
+        const user = await buildUser({ email: uniqueEmail() });
+
+        const { error } = await authenticate({
+          headers: {
+            "x-auth-request-email": user.email!,
+            [EDGE_SECRET_HEADER]: secret,
+          },
+        });
+
+        expect(error).toHaveProperty("status", 401);
+      }
+    );
+
+    it("warns with the mPass id, path and socket address but never the email", async () => {
+      const warn = vi.spyOn(Logger, "warn");
+      const email = uniqueEmail();
+
+      await authenticate({
+        headers: {
+          "x-auth-request-email": email,
+          "x-auth-request-user": email,
+          "x-auth-request-preferred-username": "mpass-123",
+          "x-forwarded-for": "10.9.9.9",
+        },
+      });
+
+      expect(warn).toHaveBeenCalledWith(
+        "mPass identity headers ignored: request lacks the edge secret",
+        {
+          mpassId: "mpass-123",
+          path: "/api/auth.info",
+          remoteAddr: "172.18.0.9",
+        }
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(email);
+    });
+
+    it("does not end a session on a forged identity switch", async () => {
+      const user = await buildUser({ email: uniqueEmail() });
+      const other = await buildUser({ email: uniqueEmail() });
+
+      const { state, error } = await authenticate({
+        headers: { "x-auth-request-email": other.email! },
+        cookie: user.getSessionToken(),
+      });
+
+      expect(error).toBeUndefined();
+      expect(state.auth.user.id).toEqual(user.id);
+    });
+
+    it("still redirects a stale session on an edge-vouched identity switch", async () => {
+      const user = await buildUser({ email: uniqueEmail() });
+      const other = await buildUser({ email: uniqueEmail() });
+
+      const { error } = await authenticate({
+        headers: {
+          "x-auth-request-email": other.email!,
+          [EDGE_SECRET_HEADER]: EDGE_SECRET,
+        },
+        cookie: user.getSessionToken(),
+      });
+
+      expect(error).toHaveProperty("status", 302);
+    });
+
+    it("authenticates an API key even when forged identity headers are present", async () => {
+      const user = await buildUser();
+      const apiKey = await buildApiKey({ userId: user.id });
+      const victim = await buildAdmin({ teamId: user.teamId });
+
+      const { state, error } = await authenticate({
+        headers: {
+          authorization: `Bearer ${apiKey.value}`,
+          "x-auth-request-email": victim.email!,
+        },
+      });
+
+      expect(error).toBeUndefined();
+      expect(state.auth.user.id).toEqual(user.id);
+      expect(state.auth.type).toEqual(AuthenticationType.API);
+    });
+  });
+
+  describe("corporate gate", () => {
+    const CLIENT_ID = "outline-client";
+    const CORPORATE_ID = "corp-42";
+    const KID = "kid-1";
+    const keyPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const otherKeyPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const jwks = {
+      keys: [{ ...keyPair.publicKey.export({ format: "jwk" }), kid: KID }],
+    };
+    let issuer: string;
+
+    function token(
+      overrides: Record<string, unknown> = {},
+      privateKey = keyPair.privateKey
+    ) {
+      return jwt.sign(
+        {
+          iss: issuer,
+          token_use: "access",
+          client_id: CLIENT_ID,
+          "custom:is_corporate": "true",
+          "custom:corporate_id": CORPORATE_ID,
+          exp: Math.floor(Date.now() / 1000) + 300,
+          ...overrides,
+        },
+        privateKey.export({ type: "pkcs8", format: "pem" }),
+        { algorithm: "RS256", keyid: KID }
+      );
+    }
+
+    function serveJwks(respond: () => Response) {
+      const jwksHandler = vi.fn(respond);
+      server.use(http.get(`${issuer}/.well-known/jwks.json`, jwksHandler));
+      return jwksHandler;
+    }
+
+    async function edgeLogin(accessToken?: string) {
+      const user = await buildUser({ email: uniqueEmail() });
+      const headers: Record<string, string> = {
+        "x-auth-request-email": user.email!,
+        [EDGE_SECRET_HEADER]: EDGE_SECRET,
+      };
+      if (accessToken) {
+        headers["x-auth-request-access-token"] = accessToken;
+      }
+      return { user, ...(await authenticate({ headers })) };
+    }
+
+    beforeEach(() => {
+      issuer = `https://issuer-${randomString(8).toLowerCase()}.example.test/pool`;
+      env.SMB_CORPORATE_ID = CORPORATE_ID;
+      env.MPASS_COGNITO_ISSUER_URL = issuer;
+      env.MPASS_OIDC_CLIENT_ID = CLIENT_ID;
+    });
+
+    afterEach(() => {
+      env.SMB_CORPORATE_ID = "";
+      env.MPASS_COGNITO_ISSUER_URL = "";
+      env.MPASS_OIDC_CLIENT_ID = "";
+    });
+
+    it("logs in a member of this corporation with a verified token", async () => {
+      serveJwks(() => HttpResponse.json(jwks));
+
+      const { user, state, error } = await edgeLogin(token());
+
+      expect(error).toBeUndefined();
+      expect(state.auth.user.id).toEqual(user.id);
+    });
+
+    it.each([
+      ["missing_token", () => undefined],
+      ["bad_signature", () => token({}, otherKeyPair.privateKey)],
+      ["expired", () => token({ exp: Math.floor(Date.now() / 1000) - 600 })],
+      [
+        "untrusted_issuer",
+        () => token({ iss: "https://evil.example.test/pool" }),
+      ],
+      ["wrong_audience", () => token({ client_id: "another-client" })],
+      ["not_corporate", () => token({ "custom:is_corporate": "false" })],
+      ["wrong_organization", () => token({ "custom:corporate_id": "corp-7" })],
+    ])("refuses with %s", async (reason, accessToken) => {
+      serveJwks(() => HttpResponse.json(jwks));
+      const warn = vi.spyOn(Logger, "warn");
+
+      const { state, error } = await edgeLogin(accessToken());
+
+      expect(error).toHaveProperty("status", 401);
+      expect(state.auth).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        "mPass proxy login refused",
+        expect.objectContaining({ reason })
+      );
+    });
+
+    it("refuses an unsigned token it used to accept from a forged decode", async () => {
+      serveJwks(() => HttpResponse.json(jwks));
+      const unsigned = jwt.sign(
+        {
+          iss: issuer,
+          token_use: "access",
+          client_id: CLIENT_ID,
+          "custom:is_corporate": "true",
+          "custom:corporate_id": CORPORATE_ID,
+        },
+        "",
+        { algorithm: "none" }
+      );
+
+      const { error } = await edgeLogin(unsigned);
+
+      expect(error).toHaveProperty("status", 401);
+    });
+
+    it.each([
+      ["a network error", () => HttpResponse.error()],
+      ["a server error", () => new HttpResponse(null, { status: 503 })],
+      ["a non-JSON body", () => new HttpResponse("<html>", { status: 200 })],
+    ])(
+      "fails closed with jwks_unavailable and no 500 on %s",
+      async (_label, respond) => {
+        serveJwks(respond);
+        const warn = vi.spyOn(Logger, "warn");
+
+        const { error } = await edgeLogin(token());
+
+        expect(error).toHaveProperty("status", 401);
+        expect(warn).toHaveBeenCalledWith(
+          "mPass proxy login refused",
+          expect.objectContaining({ reason: "jwks_unavailable" })
+        );
+      }
+    );
+
+    it("refuses every login when the gate is on but no issuer is configured", async () => {
+      env.MPASS_COGNITO_ISSUER_URL = "";
+      const warn = vi.spyOn(Logger, "warn");
+
+      const { error } = await edgeLogin(token());
+
+      expect(error).toHaveProperty("status", 401);
+      expect(warn).toHaveBeenCalledWith(
+        "mPass proxy login refused",
+        expect.objectContaining({ reason: "verifier_unconfigured" })
+      );
+    });
+
+    it("reads no token and fetches no JWKS when SMB_CORPORATE_ID is unset", async () => {
+      env.SMB_CORPORATE_ID = "";
+      const jwksHandler = serveJwks(() => HttpResponse.json(jwks));
+
+      const { user, state, error } = await edgeLogin("not-a-jwt");
+
+      expect(error).toBeUndefined();
+      expect(state.auth.user.id).toEqual(user.id);
+      expect(jwksHandler).not.toHaveBeenCalled();
+    });
   });
 });

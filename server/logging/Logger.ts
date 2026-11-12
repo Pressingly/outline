@@ -208,6 +208,8 @@ class Logger {
       "token",
       "password",
       "content",
+      "x-mpass-edge-secret",
+      "x-auth-request-access-token",
     ];
 
     if (level > 3) {
