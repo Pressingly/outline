@@ -2,7 +2,10 @@ import { AUTH_TYPE_SSO } from "@shared/constants";
 import env from "@server/env";
 import Logger from "@server/logging/Logger";
 import { edgeSecretIsUsable } from "@server/utils/mpassEdgeTrust";
-import { MpassTokenVerifier } from "@server/utils/MpassTokenVerifier";
+import {
+  MpassTokenVerifier,
+  configured,
+} from "@server/utils/MpassTokenVerifier";
 
 let current: MpassTokenVerifier | undefined;
 
@@ -21,6 +24,16 @@ export function mpassTokenVerifier(): MpassTokenVerifier {
 }
 
 /**
+ * This deployment's SMB corporate id, or "" when the gate is off. A
+ * CHANGE_ME_ placeholder counts as unset.
+ *
+ * @returns the trimmed corporate id, or "".
+ */
+export function expectedCorporateId(): string {
+  return configured(env.SMB_CORPORATE_ID);
+}
+
+/**
  * Logs an error at boot for an mPass configuration that fails closed: no
  * usable edge secret disables SSO login, and a corporate gate without a
  * token issuer or client id refuses every login.
@@ -35,7 +48,7 @@ export function reportMpassMisconfiguration(): void {
       new Error("mPass edge secret unusable")
     );
   }
-  if (env.SMB_CORPORATE_ID && !mpassTokenVerifier().isConfigured) {
+  if (expectedCorporateId() && !mpassTokenVerifier().isConfigured) {
     Logger.error(
       "SMB_CORPORATE_ID is set but no token issuer or client id is configured (MPASS_COGNITO_ISSUER_URL, MPASS_OIDC_CLIENT_ID): every mPass login will be refused",
       new Error("mPass token verifier unconfigured")

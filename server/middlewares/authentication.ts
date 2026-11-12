@@ -29,7 +29,10 @@ import {
 } from "@server/utils/mpassEdgeTrust";
 import { InvalidMpassTokenError } from "@server/utils/MpassTokenVerifier";
 import type { MpassTokenRejection } from "@server/utils/MpassTokenVerifier";
-import { mpassTokenVerifier } from "@server/utils/mpassTokenVerifierForEnv";
+import {
+  expectedCorporateId,
+  mpassTokenVerifier,
+} from "@server/utils/mpassTokenVerifierForEnv";
 import {
   AuthenticationError,
   AuthorizationError,
@@ -408,43 +411,72 @@ function corporateClaimRejection(
 }
 
 /**
+ * How strictly the corporate gate treats a token it cannot verify. A session
+ * being established from the proxy is refused on any failure. An established
+ * session is refused only when a validly signed token names another
+ * organization, so a JWKS outage or an expired forwarded token does not sign
+ * users out: mpass-auth-proxy enforces the corporate id at login and on every
+ * refresh.
+ */
+type CorporateGateMode = "establish" | "established";
+
+const CLAIM_MISMATCHES: ReadonlySet<CorporateRejection> = new Set([
+  "not_corporate",
+  "wrong_organization",
+]);
+
+/**
  * Why the caller fails the SMB corporate gate, or undefined when it passes.
  * The forwarded token is verified against the trusted issuers' JWKS before
  * any claim is read. When SMB_CORPORATE_ID is unset the gate is off and no
  * token is read.
  *
  * @param ctx the request context forwarded by oauth2-proxy.
+ * @param expected this deployment's SMB_CORPORATE_ID.
  * @returns the rejection reason, or undefined.
  */
 async function corporateRejection(
-  ctx: AppContext
+  ctx: AppContext,
+  expected: string
 ): Promise<CorporateRejection | undefined> {
-  const expectedCorporateId = env.SMB_CORPORATE_ID;
-  if (!expectedCorporateId) {
-    return undefined;
-  }
   const accessToken = ctx.request.get(ACCESS_TOKEN_HEADER);
   if (!accessToken) {
     return "missing_token";
   }
   try {
     const claims = await mpassTokenVerifier().verify(accessToken);
-    return corporateClaimRejection(claims, expectedCorporateId);
+    return corporateClaimRejection(claims, expected);
   } catch (err) {
     return err instanceof InvalidMpassTokenError ? err.reason : "invalid";
   }
 }
 
-async function enforceCorporateGate(ctx: AppContext): Promise<void> {
-  const reason = await corporateRejection(ctx);
+function isFatal(reason: CorporateRejection, mode: CorporateGateMode) {
+  return mode === "establish" || CLAIM_MISMATCHES.has(reason);
+}
+
+async function enforceCorporateGate(
+  ctx: AppContext,
+  mode: CorporateGateMode
+): Promise<void> {
+  const expected = expectedCorporateId();
+  if (!expected) {
+    return;
+  }
+  const reason = await corporateRejection(ctx, expected);
   if (!reason) {
     return;
   }
-  Logger.warn("mPass proxy login refused", {
-    reason,
-    mpassId: mpassIdForLogs(ctx),
-    path: ctx.path,
-  });
+  const logContext = { reason, mpassId: mpassIdForLogs(ctx), path: ctx.path };
+  if (!isFatal(reason, mode)) {
+    Logger.info(
+      "authentication",
+      "mPass corporate check inconclusive: established session kept",
+      logContext
+    );
+    return;
+  }
+  Logger.warn("mPass proxy login refused", logContext);
   throw AuthenticationError("Access denied");
 }
 
@@ -568,7 +600,7 @@ async function validateAuthentication(
     const email = normalizeProxyEmail(
       token.slice(FORWARDED_TOKEN_PREFIX.length)
     );
-    await enforceCorporateGate(ctx);
+    await enforceCorporateGate(ctx, "establish");
     const { local: localPart, domain } = parseEmail(email);
 
     // A malformed forwarded email with no local part (e.g. "@example.com")
@@ -738,6 +770,10 @@ async function validateAuthentication(
         // user.
         throw StaleSessionRedirect("/home");
       }
+    }
+
+    if (env.AUTH_TYPE === AUTH_TYPE_SSO && isFromEdge(ctx)) {
+      await enforceCorporateGate(ctx, "established");
     }
   }
 

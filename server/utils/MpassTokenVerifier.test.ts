@@ -1,10 +1,13 @@
-import { createHmac, generateKeyPairSync } from "node:crypto";
+import { createHmac, generateKeyPairSync, randomUUID } from "node:crypto";
 import jwt from "jsonwebtoken";
+import Logger from "@server/logging/Logger";
 import type { JwksFetcher } from "./MpassTokenVerifier";
 import {
   InvalidMpassTokenError,
   JWKS_FAILURE_BACKOFF_MS,
   JWKS_LIFESPAN_MS,
+  JWKS_MAX_STALE_MS,
+  VERIFIED_TOKEN_CACHE_SIZE,
   MpassTokenVerifier,
   audienceMatches,
   cognitoIssuer,
@@ -45,6 +48,7 @@ function accessClaims(overrides: Record<string, unknown> = {}) {
     iat: nowSeconds(),
     exp: nowSeconds() + 300,
     sub: "mpass-sub",
+    jti: randomUUID(),
     ...overrides,
   };
 }
@@ -272,6 +276,103 @@ describe("MpassTokenVerifier", () => {
     await rejectionOf(verifier.verify(sign(accessClaims(), { kid: "b" })));
 
     expect(fetchJwks).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("MpassTokenVerifier resilience", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("remembers a verified token until it expires", async () => {
+    let now = 0;
+    const token = sign(accessClaims());
+    const exp = nowSeconds() + 300;
+    let wallNow = Date.now();
+    const fetchJwks = vi.fn<JwksFetcher>(async () => jwks);
+    const verifier = new MpassTokenVerifier({
+      issuers: [COGNITO],
+      clientId: CLIENT_ID,
+      fetchJwks,
+      clock: () => now,
+      wallClock: () => wallNow,
+    });
+
+    await verifier.verify(token);
+    now = JWKS_LIFESPAN_MS;
+    await verifier.verify(token);
+    expect(fetchJwks).toHaveBeenCalledTimes(1);
+
+    wallNow = exp * 1000;
+    await verifier.verify(token);
+    expect(fetchJwks).toHaveBeenCalledTimes(2);
+  });
+
+  it("evicts the least recently used token beyond the cache bound", async () => {
+    let now = 0;
+    const { verifier, fetchJwks } = buildVerifier(undefined, () => now);
+    const first = sign(accessClaims());
+
+    await verifier.verify(first);
+    for (let i = 0; i < VERIFIED_TOKEN_CACHE_SIZE; i++) {
+      await verifier.verify(sign(accessClaims()));
+    }
+    now = JWKS_LIFESPAN_MS;
+    await verifier.verify(first);
+
+    expect(fetchJwks).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves the last good key set for up to 24h when a refresh fails", async () => {
+    let now = 0;
+    const warn = vi.spyOn(Logger, "warn");
+    const fetchJwks = vi.fn<JwksFetcher>(async () => jwks);
+    const { verifier } = buildVerifier(fetchJwks, () => now);
+
+    await verifier.verify(sign(accessClaims()));
+    fetchJwks.mockImplementation(async () => {
+      throw new Error("down");
+    });
+
+    now = JWKS_LIFESPAN_MS;
+    await expect(verifier.verify(sign(accessClaims()))).resolves.toBeDefined();
+    now = JWKS_LIFESPAN_MS + 1000;
+    await expect(verifier.verify(sign(accessClaims()))).resolves.toBeDefined();
+    expect(warn).toHaveBeenCalledWith(
+      "mPass JWKS refresh failed: serving the last good key set",
+      expect.objectContaining({ issuer: COGNITO })
+    );
+
+    now = JWKS_MAX_STALE_MS;
+    expect(await rejectionOf(verifier.verify(sign(accessClaims())))).toEqual(
+      "jwks_unavailable"
+    );
+  });
+
+  it("shares one in-flight fetch per issuer between concurrent requests", async () => {
+    const { verifier, fetchJwks } = buildVerifier();
+
+    await Promise.all([
+      verifier.verify(sign(accessClaims())),
+      verifier.verify(sign(accessClaims())),
+      verifier.verify(sign(accessClaims())),
+    ]);
+
+    expect(fetchJwks).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips a key that fails to import and keeps the rest", async () => {
+    const warn = vi.spyOn(Logger, "warn");
+    const broken = { kty: "RSA", kid: "broken", n: "!!!", e: "AQAB" };
+    const { verifier } = buildVerifier(
+      vi.fn<JwksFetcher>(async () => ({ keys: [broken, ...jwks.keys] }))
+    );
+
+    await expect(verifier.verify(sign(accessClaims()))).resolves.toBeDefined();
+    expect(warn).toHaveBeenCalledWith(
+      "mPass JWKS key skipped: it could not be imported",
+      { issuer: COGNITO, kid: "broken" }
+    );
   });
 });
 

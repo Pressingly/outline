@@ -1647,6 +1647,126 @@ describe("Authentication middleware - mPass edge trust", () => {
       );
     });
 
+    async function establishedRequest(accessToken?: string) {
+      const user = await buildUser({ email: uniqueEmail() });
+      const headers: Record<string, string> = {
+        "x-auth-request-email": user.email!,
+        [EDGE_SECRET_HEADER]: EDGE_SECRET,
+      };
+      if (accessToken) {
+        headers["x-auth-request-access-token"] = accessToken;
+      }
+      return {
+        user,
+        ...(await authenticate({ headers, cookie: user.getSessionToken() })),
+      };
+    }
+
+    describe("on an established session", () => {
+      it.each([
+        ["jwks_unavailable", () => new HttpResponse(null, { status: 503 })],
+        ["expired", () => HttpResponse.json(jwks)],
+      ])(
+        "keeps the session when the check is inconclusive (%s)",
+        async (reason, respond) => {
+          serveJwks(respond);
+          const info = vi.spyOn(Logger, "info");
+          const accessToken =
+            reason === "expired"
+              ? token({ exp: Math.floor(Date.now() / 1000) - 600 })
+              : token();
+
+          const { user, state, error } = await establishedRequest(accessToken);
+
+          expect(error).toBeUndefined();
+          expect(state.auth.user.id).toEqual(user.id);
+          expect(info).toHaveBeenCalledWith(
+            "authentication",
+            "mPass corporate check inconclusive: established session kept",
+            expect.objectContaining({ reason })
+          );
+        }
+      );
+
+      it("keeps the session when no token is forwarded", async () => {
+        const { user, state, error } = await establishedRequest();
+
+        expect(error).toBeUndefined();
+        expect(state.auth.user.id).toEqual(user.id);
+      });
+
+      it.each([
+        ["not_corporate", { "custom:is_corporate": "false" }],
+        ["wrong_organization", { "custom:corporate_id": "corp-7" }],
+      ])(
+        "ends the session when a valid token says %s",
+        async (reason, claims) => {
+          serveJwks(() => HttpResponse.json(jwks));
+          const warn = vi.spyOn(Logger, "warn");
+
+          const { state, error } = await establishedRequest(token(claims));
+
+          expect(error).toHaveProperty("status", 401);
+          expect(error).toHaveProperty(
+            ["headers", "set-cookie"],
+            expect.arrayContaining([expect.stringContaining("accessToken=;")])
+          );
+          expect(state.auth).toBeUndefined();
+          expect(warn).toHaveBeenCalledWith(
+            "mPass proxy login refused",
+            expect.objectContaining({ reason })
+          );
+        }
+      );
+
+      it("verifies each forwarded token once until it expires", async () => {
+        const jwksHandler = serveJwks(() => HttpResponse.json(jwks));
+        const accessToken = token();
+
+        await establishedRequest(accessToken);
+        await establishedRequest(accessToken);
+
+        expect(jwksHandler).toHaveBeenCalledTimes(1);
+      });
+
+      it("does not run the gate on a session request that bypassed the edge", async () => {
+        const jwksHandler = serveJwks(() => HttpResponse.json(jwks));
+        const user = await buildUser({ email: uniqueEmail() });
+
+        const { state, error } = await authenticate({
+          headers: {
+            "x-auth-request-access-token": token({
+              "custom:corporate_id": "corp-7",
+            }),
+          },
+          cookie: user.getSessionToken(),
+        });
+
+        expect(error).toBeUndefined();
+        expect(state.auth.user.id).toEqual(user.id);
+        expect(jwksHandler).not.toHaveBeenCalled();
+      });
+    });
+
+    it("trims SMB_CORPORATE_ID before comparing", async () => {
+      env.SMB_CORPORATE_ID = `  ${CORPORATE_ID} `;
+      serveJwks(() => HttpResponse.json(jwks));
+
+      const { error } = await edgeLogin(token());
+
+      expect(error).toBeUndefined();
+    });
+
+    it("treats a CHANGE_ME_ SMB_CORPORATE_ID as unset", async () => {
+      env.SMB_CORPORATE_ID = "CHANGE_ME_SMB_CORPORATE_ID";
+      const jwksHandler = serveJwks(() => HttpResponse.json(jwks));
+
+      const { error } = await edgeLogin();
+
+      expect(error).toBeUndefined();
+      expect(jwksHandler).not.toHaveBeenCalled();
+    });
+
     it("reads no token and fetches no JWKS when SMB_CORPORATE_ID is unset", async () => {
       env.SMB_CORPORATE_ID = "";
       const jwksHandler = serveJwks(() => HttpResponse.json(jwks));

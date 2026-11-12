@@ -1,6 +1,7 @@
-import { createPublicKey } from "node:crypto";
+import { createHash, createPublicKey } from "node:crypto";
 import type { Algorithm, JwtPayload } from "jsonwebtoken";
 import jwt from "jsonwebtoken";
+import Logger from "@server/logging/Logger";
 
 /** Why a forwarded mPass token was refused. */
 export type MpassTokenRejection =
@@ -35,8 +36,10 @@ export interface MpassTokenVerifierOptions {
   clientId: string;
   /** Fetches a JWKS document; defaults to an HTTP GET with a short timeout. */
   fetchJwks?: JwksFetcher;
-  /** Monotonic clock in milliseconds; injectable for tests. */
+  /** Monotonic clock in milliseconds, for JWKS cache ages; injectable for tests. */
   clock?: () => number;
+  /** Wall clock in milliseconds, compared with token expiry; injectable for tests. */
+  wallClock?: () => number;
 }
 
 /** Thrown when a forwarded token fails verification, carrying the reason. */
@@ -52,10 +55,13 @@ export class InvalidMpassTokenError extends Error {
 export const JWKS_FETCH_TIMEOUT_MS = 2000;
 export const JWKS_LIFESPAN_MS = 60 * 60 * 1000;
 export const JWKS_FAILURE_BACKOFF_MS = 30 * 1000;
+export const JWKS_MAX_STALE_MS = 24 * 60 * 60 * 1000;
 export const CLOCK_SKEW_LEEWAY_SECONDS = 60;
+export const VERIFIED_TOKEN_CACHE_SIZE = 1000;
 
 const PLACEHOLDER_PREFIX = "CHANGE_ME_";
 const ALGORITHM: Algorithm = "RS256";
+const MIN_RSA_MODULUS_BITS = 2048;
 const REQUIRED_CLAIMS = ["exp", "iat", "iss", "token_use"];
 
 /**
@@ -140,6 +146,11 @@ export async function fetchJwksOverHttp(url: string): Promise<unknown> {
 
 type PemPublicKey = string;
 
+interface VerifiedToken {
+  claims: JwtPayload;
+  expiresAt: number;
+}
+
 interface CachedKeySet {
   keys: Map<string, PemPublicKey>;
   fetchedAt: number;
@@ -173,6 +184,8 @@ export class MpassTokenVerifier {
   private readonly clientId: string;
   private readonly fetchJwks: JwksFetcher;
   private readonly clock: () => number;
+  private readonly wallClock: () => number;
+  private readonly verified = new Map<string, VerifiedToken>();
   private readonly keySets = new Map<string, CachedKeySet>();
   private readonly failedAt = new Map<string, number>();
   private readonly lastFetchAt = new Map<string, number>();
@@ -183,11 +196,13 @@ export class MpassTokenVerifier {
     clientId,
     fetchJwks = fetchJwksOverHttp,
     clock = () => performance.now(),
+    wallClock = () => Date.now(),
   }: MpassTokenVerifierOptions) {
     this.issuers = new Set(issuers.filter(Boolean));
     this.clientId = clientId;
     this.fetchJwks = fetchJwks;
     this.clock = clock;
+    this.wallClock = wallClock;
   }
 
   public get isConfigured(): boolean {
@@ -201,6 +216,8 @@ export class MpassTokenVerifier {
 
   /**
    * Verifies a forwarded token's signature, issuer, lifetime and audience.
+   * A verified token is remembered until it expires, so later requests of the
+   * same session skip the JWKS lookup.
    *
    * @param token the raw JWT.
    * @returns the verified claims.
@@ -210,13 +227,45 @@ export class MpassTokenVerifier {
     if (!this.isConfigured) {
       throw new InvalidMpassTokenError("verifier_unconfigured");
     }
+    const cacheKey = tokenDigest(token);
+    const remembered = this.rememberedClaims(cacheKey);
+    if (remembered) {
+      return remembered;
+    }
     const { kid, issuer } = this.unverifiedHeaderAndIssuer(token);
     const key = await this.signingKey(issuer, kid);
     const claims = this.decode(token, key, issuer);
     if (!audienceMatches(claims, this.clientId)) {
       throw new InvalidMpassTokenError("wrong_audience");
     }
+    this.remember(cacheKey, claims);
     return claims;
+  }
+
+  private rememberedClaims(cacheKey: string): JwtPayload | undefined {
+    const entry = this.verified.get(cacheKey);
+    if (!entry) {
+      return undefined;
+    }
+    this.verified.delete(cacheKey);
+    if (this.wallClock() >= entry.expiresAt) {
+      return undefined;
+    }
+    this.verified.set(cacheKey, entry);
+    return entry.claims;
+  }
+
+  private remember(cacheKey: string, claims: JwtPayload): void {
+    if (typeof claims.exp !== "number") {
+      return;
+    }
+    this.verified.set(cacheKey, { claims, expiresAt: claims.exp * 1000 });
+    if (this.verified.size > VERIFIED_TOKEN_CACHE_SIZE) {
+      const oldest = this.verified.keys().next().value;
+      if (oldest !== undefined) {
+        this.verified.delete(oldest);
+      }
+    }
   }
 
   private unverifiedHeaderAndIssuer(token: string): {
@@ -258,15 +307,7 @@ export class MpassTokenVerifier {
   }
 
   private async signingKey(issuer: string, kid: string): Promise<PemPublicKey> {
-    const cached = this.keySets.get(issuer);
-    const cachedKey = cached?.keys.get(kid);
-    if (cached && cachedKey && !this.isStale(cached)) {
-      return cachedKey;
-    }
-    if (cached && !this.isStale(cached) && !this.mayRefetch(issuer)) {
-      throw new InvalidMpassTokenError("unknown_signing_key");
-    }
-    const keySet = await this.refreshKeySet(issuer);
+    const keySet = await this.keySetFor(issuer, kid);
     const key = keySet.keys.get(kid);
     if (!key) {
       throw new InvalidMpassTokenError("unknown_signing_key");
@@ -274,24 +315,50 @@ export class MpassTokenVerifier {
     return key;
   }
 
+  private async keySetFor(issuer: string, kid: string): Promise<CachedKeySet> {
+    const cached = this.keySets.get(issuer);
+    if (
+      cached &&
+      !this.isStale(cached) &&
+      (cached.keys.has(kid) || !this.mayRefetch(issuer))
+    ) {
+      return cached;
+    }
+    try {
+      return await this.refreshKeySet(issuer);
+    } catch (err) {
+      if (!cached || this.isExpired(cached)) {
+        throw err;
+      }
+      Logger.warn("mPass JWKS refresh failed: serving the last good key set", {
+        issuer,
+        ageSeconds: Math.round((this.clock() - cached.fetchedAt) / 1000),
+      });
+      return cached;
+    }
+  }
+
   private async refreshKeySet(issuer: string): Promise<CachedKeySet> {
     if (this.recentlyFailed(issuer)) {
       throw new InvalidMpassTokenError("jwks_unavailable");
     }
-    const pending = this.inFlight.get(issuer) ?? this.loadKeySet(issuer);
+    const pending = this.inFlight.get(issuer) ?? this.startLoad(issuer);
+    return pending;
+  }
+
+  private startLoad(issuer: string): Promise<CachedKeySet> {
+    const pending = this.loadKeySet(issuer).finally(() =>
+      this.inFlight.delete(issuer)
+    );
     this.inFlight.set(issuer, pending);
-    try {
-      return await pending;
-    } finally {
-      this.inFlight.delete(issuer);
-    }
+    return pending;
   }
 
   private async loadKeySet(issuer: string): Promise<CachedKeySet> {
     this.lastFetchAt.set(issuer, this.clock());
     try {
       const keySet = {
-        keys: parseJwks(await this.fetchJwks(jwksUrl(issuer))),
+        keys: parseJwks(await this.fetchJwks(jwksUrl(issuer)), issuer),
         fetchedAt: this.clock(),
       };
       this.keySets.set(issuer, keySet);
@@ -305,6 +372,10 @@ export class MpassTokenVerifier {
 
   private isStale(keySet: CachedKeySet): boolean {
     return this.clock() - keySet.fetchedAt >= JWKS_LIFESPAN_MS;
+  }
+
+  private isExpired(keySet: CachedKeySet): boolean {
+    return this.clock() - keySet.fetchedAt >= JWKS_MAX_STALE_MS;
   }
 
   private mayRefetch(issuer: string): boolean {
@@ -345,13 +416,37 @@ function rejectionFor(err: unknown): MpassTokenRejection {
   return "invalid";
 }
 
-function parseJwks(document: unknown): Map<string, PemPublicKey> {
+function parseJwks(
+  document: unknown,
+  issuer: string
+): Map<string, PemPublicKey> {
   if (!isRecord(document) || !Array.isArray(document.keys)) {
     throw new Error("JWKS document has no keys array");
   }
   return new Map(
-    document.keys.filter(isUsableRsaKey).map((jwk) => [jwk.kid, toKey(jwk)])
+    document.keys
+      .filter(isUsableRsaKey)
+      .flatMap((jwk) => importedKey(jwk, issuer))
   );
+}
+
+function importedKey(
+  jwk: RsaJwk,
+  issuer: string
+): Array<[string, PemPublicKey]> {
+  try {
+    return [[jwk.kid, toKey(jwk)]];
+  } catch {
+    Logger.warn("mPass JWKS key skipped: it could not be imported", {
+      issuer,
+      kid: jwk.kid,
+    });
+    return [];
+  }
+}
+
+function tokenDigest(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }
 
 interface RsaJwk {
@@ -374,12 +469,15 @@ function isUsableRsaKey(value: unknown): value is RsaJwk {
 }
 
 function toKey(jwk: RsaJwk): PemPublicKey {
-  return createPublicKey({
+  const key = createPublicKey({
     key: { kty: jwk.kty, n: jwk.n, e: jwk.e },
     format: "jwk",
-  })
-    .export({ type: "spki", format: "pem" })
-    .toString();
+  });
+  const modulusLength = key.asymmetricKeyDetails?.modulusLength ?? 0;
+  if (modulusLength < MIN_RSA_MODULUS_BITS) {
+    throw new Error(`RSA key ${jwk.kid} is ${modulusLength} bits`);
+  }
+  return key.export({ type: "spki", format: "pem" }).toString();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
