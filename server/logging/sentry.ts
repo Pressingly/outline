@@ -1,4 +1,5 @@
 import * as Sentry from "@sentry/node";
+import type { ErrorEvent } from "@sentry/node";
 import env from "@server/env";
 import type { AppContext } from "@server/types";
 
@@ -39,12 +40,37 @@ if (env.SENTRY_DSN) {
             }
             break;
         }
-        return event;
+        return withRedactedHeaders(event);
       } catch (_) {
-        return event;
+        return withRedactedHeaders(event);
       }
     },
   });
+}
+
+const REDACTED_HEADERS = new Set([
+  "x-mpass-edge-secret",
+  "x-auth-request-access-token",
+]);
+
+/**
+ * Returns a copy of the event with secret-bearing request headers redacted.
+ *
+ * @param event the event about to be sent.
+ * @returns the event with the edge secret and forwarded token removed.
+ */
+export function withRedactedHeaders(event: ErrorEvent): ErrorEvent {
+  const headers = event.request?.headers;
+  if (!headers) {
+    return event;
+  }
+  const redacted = Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => [
+      name,
+      REDACTED_HEADERS.has(name.toLowerCase()) ? "[Filtered]" : value,
+    ])
+  );
+  return { ...event, request: { ...event.request, headers: redacted } };
 }
 
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any

@@ -16,6 +16,7 @@ import csp from "@server/middlewares/csp";
 import { attachCSRFToken } from "@server/middlewares/csrf";
 import { ShutdownHelper, ShutdownOrder } from "@server/utils/ShutdownHelper";
 import { initI18n } from "@server/utils/i18n";
+import { reportMpassMisconfiguration } from "@server/utils/mpassTokenVerifierForEnv";
 import routes from "../routes";
 import api from "../routes/api";
 import auth from "../routes/auth";
@@ -26,6 +27,7 @@ import userAgent from "koa-useragent";
 
 export default function init(app: Koa = new Koa(), server?: Server) {
   void initI18n();
+  reportMpassMisconfiguration();
 
   if (env.isProduction) {
     // Trust the X-Forwarded-* headers set by an upstream proxy, eg

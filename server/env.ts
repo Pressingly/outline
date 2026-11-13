@@ -924,6 +924,48 @@ export class Environment {
   public SMB_CORPORATE_ID = environment.SMB_CORPORATE_ID ?? "";
 
   /**
+   * Shared secret Traefik injects as X-Mpass-Edge-Secret on the mPass SSO
+   * router. The X-Auth-Request-* identity headers are trusted only on requests
+   * that carry it; shorter than 32 characters or unset, they are never trusted.
+   */
+  @IsOptional()
+  public MPASS_EDGE_SECRET = environment.MPASS_EDGE_SECRET ?? "";
+
+  /**
+   * Issuer URL of the Cognito user pool oauth2-proxy validates. Used to verify
+   * the forwarded token when SMB_CORPORATE_ID is set.
+   */
+  @IsOptional()
+  public MPASS_COGNITO_ISSUER_URL = environment.MPASS_COGNITO_ISSUER_URL ?? "";
+
+  /**
+   * Cognito region, the fallback source of the Cognito issuer when
+   * MPASS_COGNITO_ISSUER_URL is unset.
+   */
+  @IsOptional()
+  public COGNITO_AWS_REGION = environment.COGNITO_AWS_REGION ?? "";
+
+  /**
+   * Cognito user pool id, the fallback source of the Cognito issuer when
+   * MPASS_COGNITO_ISSUER_URL is unset.
+   */
+  @IsOptional()
+  public COGNITO_USER_POOL_ID = environment.COGNITO_USER_POOL_ID ?? "";
+
+  /**
+   * Issuer URL of mpass-auth-proxy, which re-signs id_tokens when email
+   * capture is on. Optional second trusted issuer for the forwarded token.
+   */
+  @IsOptional()
+  public MPASS_TOKEN_ISSUER_URL = environment.MPASS_TOKEN_ISSUER_URL ?? "";
+
+  /**
+   * OIDC client id the forwarded mPass token must have been issued to.
+   */
+  @IsOptional()
+  public MPASS_OIDC_CLIENT_ID = environment.MPASS_OIDC_CLIENT_ID ?? "";
+
+  /**
    * Gravity constant for time decay in popularity scoring. Higher values cause
    * faster decay of older content. Default is 0.7.
    */
