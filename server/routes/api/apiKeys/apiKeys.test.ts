@@ -144,24 +144,30 @@ describe("#apiKeys.create", () => {
 
 describe("#apiKeys.create via ForwardAuth", () => {
   let originalAuthType: typeof env.AUTH_TYPE;
+  const edgeSecret = "e".repeat(64);
 
   const uniqueEmail = () => `${randomString(10).toLowerCase()}@example.com`;
 
   beforeEach(() => {
     originalAuthType = env.AUTH_TYPE;
     env.AUTH_TYPE = AUTH_TYPE_SSO;
+    env.MPASS_EDGE_SECRET = edgeSecret;
   });
 
   afterEach(() => {
     env.AUTH_TYPE = originalAuthType;
+    env.MPASS_EDGE_SECRET = "";
   });
 
-  it("should mint a key from the proxy header alone, as outline-mcp-server does", async () => {
+  it("should mint a key from the proxy header with the edge secret, as outline-mcp-server does", async () => {
     const email = uniqueEmail();
     const user = await buildUser({ email });
 
     const res = await server.post("/api/apiKeys.create", {
-      headers: { "X-Auth-Request-Email": email },
+      headers: {
+        "X-Auth-Request-Email": email,
+        "X-Mpass-Edge-Secret": edgeSecret,
+      },
       body: { name: "moneta-mcp" },
     });
     const body = await res.json();
@@ -170,6 +176,25 @@ describe("#apiKeys.create via ForwardAuth", () => {
     expect(body.data.userId).toEqual(user.id);
     expect(body.data.value).toMatch(/^ol_api_/);
   });
+
+  it.each([
+    ["without the edge secret", {}],
+    ["with a wrong edge secret", { "X-Mpass-Edge-Secret": "x".repeat(64) }],
+  ])(
+    "should not mint a key from a forged proxy header %s",
+    async (_label, edgeHeaders) => {
+      const email = uniqueEmail();
+      const user = await buildUser({ email });
+
+      const res = await server.post("/api/apiKeys.create", {
+        headers: { "X-Auth-Request-Email": email, ...edgeHeaders },
+        body: { name: "forged" },
+      });
+
+      expect(res.status).toEqual(401);
+      expect(await ApiKey.count({ where: { userId: user.id } })).toEqual(0);
+    }
+  );
 
   it.each([
     {
@@ -209,7 +234,11 @@ describe("#apiKeys.create via ForwardAuth", () => {
       const { path, headers, body } = request(victimEmail);
 
       const res = await server.post(path, {
-        headers: { ...headers, "X-Auth-Request-Email": attackerEmail },
+        headers: {
+          ...headers,
+          "X-Auth-Request-Email": attackerEmail,
+          "X-Mpass-Edge-Secret": edgeSecret,
+        },
         body,
       });
 

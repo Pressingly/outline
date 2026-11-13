@@ -1,4 +1,5 @@
 import { addDays } from "date-fns";
+import type { JwtPayload } from "jsonwebtoken";
 import type { Next } from "koa";
 import { capitalize } from "es-toolkit/compat";
 import httpErrors from "http-errors";
@@ -22,6 +23,18 @@ import type { AppContext } from "@server/types";
 import { AuthenticationType } from "@server/types";
 import { JWT_COOKIE_TTL_DAYS } from "@server/utils/authentication";
 import { getJWTPayload, getUserForJWT } from "@server/utils/jwt";
+import { LogThrottle } from "@server/utils/LogThrottle";
+import {
+  EDGE_SECRET_HEADER,
+  requestIsFromEdge,
+} from "@server/utils/mpassEdgeTrust";
+import { InvalidMpassTokenError } from "@server/utils/MpassTokenVerifier";
+import type { MpassTokenRejection } from "@server/utils/MpassTokenVerifier";
+import {
+  corporateIdIsPlaceholder,
+  expectedCorporateId,
+  mpassTokenVerifier,
+} from "@server/utils/mpassTokenVerifierForEnv";
 import {
   AuthenticationError,
   AuthorizationError,
@@ -242,14 +255,12 @@ export function parseAuthentication(ctx: AppContext): AuthInput {
   // credentials — so an existing session cookie (or Bearer token) is always
   // preferred. This means once the JWT cookie has been issued the header path
   // is bypassed entirely, avoiding a DB round-trip on every request.
-  if (env.AUTH_TYPE === AUTH_TYPE_SSO) {
-    const authRequestEmail = ctx.request.get("x-auth-request-email");
-    if (authRequestEmail) {
-      return {
-        token: `${FORWARDED_TOKEN_PREFIX}${authRequestEmail}`,
-        transport: "proxy",
-      };
-    }
+  const authRequestEmail = trustedProxyEmail(ctx);
+  if (authRequestEmail) {
+    return {
+      token: `${FORWARDED_TOKEN_PREFIX}${authRequestEmail}`,
+      transport: "proxy",
+    };
   }
 
   return {
@@ -307,44 +318,177 @@ function isClientSuppliedForwardedToken(
   return token.startsWith(FORWARDED_TOKEN_PREFIX) && transport !== "proxy";
 }
 
+const IDENTITY_HEADERS = ["x-auth-request-email", "x-auth-request-user"];
+const MPASS_ID_HEADERS = [
+  "x-auth-request-user",
+  "x-auth-request-preferred-username",
+];
+const ACCESS_TOKEN_HEADER = "x-auth-request-access-token";
+const MAX_LOGGED_MPASS_ID_LENGTH = 64;
+const untrustedHeaderWarnings = new LogThrottle({ intervalMs: 60 * 1000 });
+
+function isFromEdge(ctx: AppContext): boolean {
+  return requestIsFromEdge(
+    ctx.request.get(EDGE_SECRET_HEADER),
+    env.MPASS_EDGE_SECRET
+  );
+}
+
 /**
- * Verify that the caller's mPass access token carries a `custom:corporate_id`
- * matching this deployment's `SMB_CORPORATE_ID`. When the env var is empty the
- * check is skipped entirely (backward-compatible default).
+ * The proxy-asserted email, or "" unless SSO is on and the request came
+ * through the edge. Untrusted identity headers are dropped before anything
+ * acts on them, so they can neither log anyone in nor end a session.
  *
- * @param ctx - koa request context forwarded by oauth2-proxy.
+ * @param ctx the request context.
+ * @returns the raw forwarded email, or "".
  */
-function checkCorporateId(ctx: AppContext): void {
-  const expectedCorporateId = env.SMB_CORPORATE_ID;
-  if (!expectedCorporateId) {
+function trustedProxyEmail(ctx: AppContext): string {
+  if (env.AUTH_TYPE !== AUTH_TYPE_SSO || !isFromEdge(ctx)) {
+    return "";
+  }
+  return ctx.request.get("x-auth-request-email") ?? "";
+}
+
+function carriesIdentityHeaders(ctx: AppContext): boolean {
+  return IDENTITY_HEADERS.some((header) => !!ctx.request.get(header));
+}
+
+/**
+ * The caller's mPass id for logs, never an email: with email capture on,
+ * X-Auth-Request-User carries the email.
+ *
+ * @param ctx the request context.
+ * @returns the mPass id, or "-".
+ */
+function mpassIdForLogs(ctx: AppContext): string {
+  const candidates = MPASS_ID_HEADERS.map((header) =>
+    (ctx.request.get(header) ?? "").trim()
+  );
+  const mpassId = candidates.find((value) => value && !value.includes("@"));
+  return mpassId ? mpassId.slice(0, MAX_LOGGED_MPASS_ID_LENGTH) : "-";
+}
+
+function remoteAddress(ctx: AppContext): string {
+  return ctx.req?.socket?.remoteAddress ?? "-";
+}
+
+function warnOnUntrustedIdentityHeaders(ctx: AppContext): void {
+  if (
+    env.AUTH_TYPE === AUTH_TYPE_SSO &&
+    carriesIdentityHeaders(ctx) &&
+    !isFromEdge(ctx) &&
+    untrustedHeaderWarnings.shouldLog(remoteAddress(ctx))
+  ) {
+    Logger.warn(
+      "mPass identity headers ignored: request lacks the edge secret",
+      {
+        mpassId: mpassIdForLogs(ctx),
+        path: ctx.path,
+        remoteAddr: remoteAddress(ctx),
+      }
+    );
+  }
+}
+
+type CorporateRejection =
+  | MpassTokenRejection
+  | "placeholder_config"
+  | "missing_token"
+  | "not_corporate"
+  | "wrong_organization";
+
+/**
+ * Why verified claims fail the SMB corporate gate, or undefined when they pass.
+ *
+ * @param claims the verified token claims.
+ * @param expectedCorporateId this deployment's SMB_CORPORATE_ID.
+ * @returns the rejection reason, or undefined.
+ */
+function corporateClaimRejection(
+  claims: JwtPayload,
+  expectedCorporateId: string
+): CorporateRejection | undefined {
+  if (claims["custom:is_corporate"] !== "true") {
+    return "not_corporate";
+  }
+  if (claims["custom:corporate_id"] !== expectedCorporateId) {
+    return "wrong_organization";
+  }
+  return undefined;
+}
+
+/**
+ * How strictly the corporate gate treats a token it cannot verify. A session
+ * being established from the proxy is refused on any failure. An established
+ * session is refused only when a validly signed token names another
+ * organization, so a JWKS outage or an expired forwarded token does not sign
+ * users out: mpass-auth-proxy enforces the corporate id at login and on every
+ * refresh.
+ */
+type CorporateGateMode = "establish" | "established";
+
+const ALWAYS_FATAL: ReadonlySet<CorporateRejection> = new Set([
+  "placeholder_config",
+  "not_corporate",
+  "wrong_organization",
+]);
+
+/**
+ * Why the caller fails the SMB corporate gate, or undefined when it passes.
+ * The forwarded token is verified against the trusted issuers' JWKS before
+ * any claim is read. When SMB_CORPORATE_ID is unset the gate is off and no
+ * token is read.
+ *
+ * @param ctx the request context forwarded by oauth2-proxy.
+ * @param expected this deployment's SMB_CORPORATE_ID.
+ * @returns the rejection reason, or undefined.
+ */
+async function corporateRejection(
+  ctx: AppContext,
+  expected: string
+): Promise<CorporateRejection | undefined> {
+  if (corporateIdIsPlaceholder()) {
+    return "placeholder_config";
+  }
+  const accessToken = ctx.request.get(ACCESS_TOKEN_HEADER);
+  if (!accessToken) {
+    return "missing_token";
+  }
+  try {
+    const claims = await mpassTokenVerifier().verify(accessToken);
+    return corporateClaimRejection(claims, expected);
+  } catch (err) {
+    return err instanceof InvalidMpassTokenError ? err.reason : "invalid";
+  }
+}
+
+function isFatal(reason: CorporateRejection, mode: CorporateGateMode) {
+  return mode === "establish" || ALWAYS_FATAL.has(reason);
+}
+
+async function enforceCorporateGate(
+  ctx: AppContext,
+  mode: CorporateGateMode
+): Promise<void> {
+  const expected = expectedCorporateId();
+  if (!expected) {
     return;
   }
-
-  const accessToken = ctx.request.get("x-auth-request-access-token");
-  if (!accessToken) {
-    throw AuthenticationError("Access denied: missing access token");
+  const reason = await corporateRejection(ctx, expected);
+  if (!reason) {
+    return;
   }
-
-  try {
-    // Decode JWT payload without verification — oauth2-proxy already verified
-    // the signature before forwarding the request.
-    const payloadB64 = accessToken.split(".")[1];
-    const payload = JSON.parse(
-      Buffer.from(payloadB64, "base64url").toString()
+  const logContext = { reason, mpassId: mpassIdForLogs(ctx), path: ctx.path };
+  if (!isFatal(reason, mode)) {
+    Logger.info(
+      "authentication",
+      "mPass corporate check inconclusive: established session kept",
+      logContext
     );
-
-    if (payload["custom:is_corporate"] !== "true") {
-      throw AuthenticationError("Access denied: not a corporate account");
-    }
-    if (payload["custom:corporate_id"] !== expectedCorporateId) {
-      throw AuthenticationError("Access denied: corporate ID mismatch");
-    }
-  } catch (e) {
-    if (e instanceof Error && "statusCode" in e) {
-      throw e;
-    }
-    throw AuthenticationError("Access denied: invalid access token");
+    return;
   }
+  Logger.warn("mPass proxy login refused", logContext);
+  throw AuthenticationError("Access denied");
 }
 
 async function validateAuthentication(
@@ -358,6 +502,7 @@ async function validateAuthentication(
   scope?: string[];
   transport?: AuthTransport;
 }> {
+  warnOnUntrustedIdentityHeaders(ctx);
   const { token, transport } = parseAuthentication(ctx);
 
   if (!token) {
@@ -466,7 +611,7 @@ async function validateAuthentication(
     const email = normalizeProxyEmail(
       token.slice(FORWARDED_TOKEN_PREFIX.length)
     );
-    checkCorporateId(ctx);
+    await enforceCorporateGate(ctx, "establish");
     const { local: localPart, domain } = parseEmail(email);
 
     // A malformed forwarded email with no local part (e.g. "@example.com")
@@ -599,7 +744,7 @@ async function validateAuthentication(
     // expired via err.headers, and the client's next request takes the
     // ForwardAuth proxy transport → new JWT for the new user.
     if (env.AUTH_TYPE === AUTH_TYPE_SSO && transport === "cookie") {
-      const headerRaw = ctx.request.get("x-auth-request-email");
+      const headerRaw = trustedProxyEmail(ctx);
       // Bidirectional normalisation: both sides MUST be lowercased AND
       // whitespace-trimmed before comparison. Asymmetric normalisation
       // (e.g. trimming the header but not user.email) is observationally
@@ -636,6 +781,10 @@ async function validateAuthentication(
         // user.
         throw StaleSessionRedirect("/home");
       }
+    }
+
+    if (env.AUTH_TYPE === AUTH_TYPE_SSO && isFromEdge(ctx)) {
+      await enforceCorporateGate(ctx, "established");
     }
   }
 
