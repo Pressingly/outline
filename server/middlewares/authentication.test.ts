@@ -1800,8 +1800,38 @@ describe("Authentication middleware - mPass edge trust", () => {
       expect(error).toBeUndefined();
     });
 
-    it("treats a CHANGE_ME_ SMB_CORPORATE_ID as unset", async () => {
-      env.SMB_CORPORATE_ID = "CHANGE_ME_SMB_CORPORATE_ID";
+    describe("with a CHANGE_ME_ SMB_CORPORATE_ID", () => {
+      beforeEach(() => {
+        env.SMB_CORPORATE_ID = " CHANGE_ME_SMB_CORPORATE_ID ";
+      });
+
+      it("refuses a new login with placeholder_config, even with a valid token", async () => {
+        const jwksHandler = serveJwks(() => HttpResponse.json(jwks));
+        const warn = vi.spyOn(Logger, "warn");
+
+        const { state, error } = await edgeLogin(token());
+
+        expect(error).toHaveProperty("status", 401);
+        expect(state.auth).toBeUndefined();
+        expect(jwksHandler).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(
+          "mPass proxy login refused",
+          expect.objectContaining({ reason: "placeholder_config" })
+        );
+      });
+
+      it("ends an established session", async () => {
+        serveJwks(() => HttpResponse.json(jwks));
+
+        const { state, error } = await establishedRequest(token());
+
+        expect(error).toHaveProperty("status", 401);
+        expect(state.auth).toBeUndefined();
+      });
+    });
+
+    it("treats a whitespace-only SMB_CORPORATE_ID as unset", async () => {
+      env.SMB_CORPORATE_ID = "   ";
       const jwksHandler = serveJwks(() => HttpResponse.json(jwks));
 
       const { error } = await edgeLogin();

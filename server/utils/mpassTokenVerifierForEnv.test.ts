@@ -2,6 +2,7 @@ import { AUTH_TYPE_SSO } from "@shared/constants";
 import env from "@server/env";
 import Logger from "@server/logging/Logger";
 import {
+  corporateIdIsPlaceholder,
   expectedCorporateId,
   reportMpassMisconfiguration,
 } from "./mpassTokenVerifierForEnv";
@@ -67,10 +68,21 @@ describe("reportMpassMisconfiguration", () => {
     expect(errorMessages()).toEqual([]);
   });
 
-  it("treats a placeholder corporate id as unset", () => {
-    env.SMB_CORPORATE_ID = "CHANGE_ME_SMB_CORPORATE_ID";
+  it("logs an error and keeps the gate on for a placeholder corporate id", () => {
+    env.SMB_CORPORATE_ID = " CHANGE_ME_SMB_CORPORATE_ID ";
+
+    expect(errorMessages()).toEqual([
+      "SMB_CORPORATE_ID is a CHANGE_ME_ placeholder: every mPass login is refused",
+    ]);
+    expect(expectedCorporateId()).toEqual("CHANGE_ME_SMB_CORPORATE_ID");
+    expect(corporateIdIsPlaceholder()).toBe(true);
+  });
+
+  it("treats a whitespace-only corporate id as unset", () => {
+    env.SMB_CORPORATE_ID = "  ";
 
     expect(errorMessages()).toEqual([]);
     expect(expectedCorporateId()).toEqual("");
+    expect(corporateIdIsPlaceholder()).toBe(false);
   });
 });

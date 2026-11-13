@@ -31,6 +31,7 @@ import {
 import { InvalidMpassTokenError } from "@server/utils/MpassTokenVerifier";
 import type { MpassTokenRejection } from "@server/utils/MpassTokenVerifier";
 import {
+  corporateIdIsPlaceholder,
   expectedCorporateId,
   mpassTokenVerifier,
 } from "@server/utils/mpassTokenVerifierForEnv";
@@ -391,6 +392,7 @@ function warnOnUntrustedIdentityHeaders(ctx: AppContext): void {
 
 type CorporateRejection =
   | MpassTokenRejection
+  | "placeholder_config"
   | "missing_token"
   | "not_corporate"
   | "wrong_organization";
@@ -425,7 +427,8 @@ function corporateClaimRejection(
  */
 type CorporateGateMode = "establish" | "established";
 
-const CLAIM_MISMATCHES: ReadonlySet<CorporateRejection> = new Set([
+const ALWAYS_FATAL: ReadonlySet<CorporateRejection> = new Set([
+  "placeholder_config",
   "not_corporate",
   "wrong_organization",
 ]);
@@ -444,6 +447,9 @@ async function corporateRejection(
   ctx: AppContext,
   expected: string
 ): Promise<CorporateRejection | undefined> {
+  if (corporateIdIsPlaceholder()) {
+    return "placeholder_config";
+  }
   const accessToken = ctx.request.get(ACCESS_TOKEN_HEADER);
   if (!accessToken) {
     return "missing_token";
@@ -457,7 +463,7 @@ async function corporateRejection(
 }
 
 function isFatal(reason: CorporateRejection, mode: CorporateGateMode) {
-  return mode === "establish" || CLAIM_MISMATCHES.has(reason);
+  return mode === "establish" || ALWAYS_FATAL.has(reason);
 }
 
 async function enforceCorporateGate(

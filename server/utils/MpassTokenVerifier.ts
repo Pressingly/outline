@@ -65,6 +65,16 @@ const MIN_RSA_MODULUS_BITS = 2048;
 const REQUIRED_CLAIMS = ["exp", "iat", "iss", "token_use"];
 
 /**
+ * Whether a setting still holds an .env.example CHANGE_ME_ placeholder.
+ *
+ * @param value the raw setting.
+ * @returns true for a placeholder value.
+ */
+export function isPlaceholder(value: string | undefined): boolean {
+  return (value ?? "").trim().startsWith(PLACEHOLDER_PREFIX);
+}
+
+/**
  * A setting's value, or "" when it is unset or still an .env.example
  * placeholder.
  *

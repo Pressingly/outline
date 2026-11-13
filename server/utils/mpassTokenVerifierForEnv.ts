@@ -4,7 +4,7 @@ import Logger from "@server/logging/Logger";
 import { edgeSecretIsUsable } from "@server/utils/mpassEdgeTrust";
 import {
   MpassTokenVerifier,
-  configured,
+  isPlaceholder,
 } from "@server/utils/MpassTokenVerifier";
 
 let current: { key: string; verifier: MpassTokenVerifier } | undefined;
@@ -36,12 +36,24 @@ export function mpassTokenVerifier(): MpassTokenVerifier {
 
 /**
  * This deployment's SMB corporate id, or "" when the gate is off. A
- * CHANGE_ME_ placeholder counts as unset.
+ * CHANGE_ME_ placeholder is returned as is and keeps the gate on, so a
+ * half-configured deployment fails closed; check it with
+ * corporateIdIsPlaceholder.
  *
  * @returns the trimmed corporate id, or "".
  */
 export function expectedCorporateId(): string {
-  return configured(env.SMB_CORPORATE_ID);
+  return (env.SMB_CORPORATE_ID ?? "").trim();
+}
+
+/**
+ * Whether SMB_CORPORATE_ID is still a CHANGE_ME_ placeholder, in which case
+ * every mPass login is refused.
+ *
+ * @returns true for a placeholder corporate id.
+ */
+export function corporateIdIsPlaceholder(): boolean {
+  return isPlaceholder(env.SMB_CORPORATE_ID);
 }
 
 /**
@@ -59,7 +71,12 @@ export function reportMpassMisconfiguration(): void {
       new Error("mPass edge secret unusable")
     );
   }
-  if (expectedCorporateId() && !mpassTokenVerifier().isConfigured) {
+  if (corporateIdIsPlaceholder()) {
+    Logger.error(
+      "SMB_CORPORATE_ID is a CHANGE_ME_ placeholder: every mPass login is refused",
+      new Error("mPass corporate id placeholder")
+    );
+  } else if (expectedCorporateId() && !mpassTokenVerifier().isConfigured) {
     Logger.error(
       "SMB_CORPORATE_ID is set but no token issuer or client id is configured (MPASS_COGNITO_ISSUER_URL, MPASS_OIDC_CLIENT_ID): every mPass login will be refused",
       new Error("mPass token verifier unconfigured")
