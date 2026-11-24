@@ -1,6 +1,8 @@
 import { faker } from "@faker-js/faker";
 import { randomUUID } from "node:crypto";
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import { Scope } from "@shared/types";
+import env from "@server/env";
 import {
   buildApiKey,
   buildOAuthAuthentication,
@@ -10,6 +12,7 @@ import {
   buildSubdomain,
 } from "@server/test/factories";
 import { getTestServer, setSelfHosted } from "@server/test/support";
+import { EDGE_SECRET_HEADER } from "@server/utils/mpassEdgeTrust";
 
 const server = getTestServer();
 
@@ -68,6 +71,36 @@ describe("#auth.info", () => {
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data.collaborationToken).toBeTruthy();
+  });
+
+  describe("with an edge-verified ForwardAuth identity", () => {
+    const edgeSecret = "e".repeat(64);
+
+    beforeEach(() => {
+      env.AUTH_TYPE = AUTH_TYPE_SSO;
+      env.MPASS_EDGE_SECRET = edgeSecret;
+    });
+
+    afterEach(() => {
+      env.AUTH_TYPE = undefined;
+      env.MPASS_EDGE_SECRET = "";
+    });
+
+    it("should return the session and issue the session cookie", async () => {
+      const user = await buildUser();
+      const res = await server.post("/api/auth.info", {
+        headers: {
+          "x-auth-request-email": user.email!,
+          [EDGE_SECRET_HEADER]: edgeSecret,
+        },
+      });
+      const body = await res.json();
+
+      expect(res.status).toEqual(200);
+      expect(body.data.user.id).toEqual(user.id);
+      expect(body.data.collaborationToken).toBeTruthy();
+      expect(res.headers.get("set-cookie")).toContain("accessToken=");
+    });
   });
 
   it("should not return a collaboration token for an API key", async () => {

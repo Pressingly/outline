@@ -89,17 +89,21 @@ export default function auth(options: AuthenticationOptions = {}) {
     }
 
     try {
-      const { type, token, user, service, scope, transport } =
-        await validateAuthentication(ctx, options);
+      const validated = await validateAuthentication(ctx, options);
+      const { type, user, service, scope, transport } = validated;
+      let { token } = validated;
 
       // Only a proxy-asserted identity earns a session cookie, so that
       // subsequent requests and cookie-dependent services (WebSocket,
       // collaboration) use the fast JWT path instead of the header DB path.
       // A forwardauth session JWT replayed as a Bearer token must not be able
-      // to mint itself a fresh long-lived cookie.
+      // to mint itself a fresh long-lived cookie. The minted JWT also replaces
+      // the internal fwd: marker as the request token, so handlers that decode
+      // ctx.state.auth.token (auth.info) see a real session JWT.
       if (transport === "proxy") {
         const expires = addDays(new Date(), JWT_COOKIE_TTL_DAYS);
-        ctx.cookies.set("accessToken", user.getSessionToken(expires, service), {
+        token = user.getSessionToken(expires, service);
+        ctx.cookies.set("accessToken", token, {
           sameSite: "lax",
           expires,
         });
