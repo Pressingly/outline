@@ -1,5 +1,6 @@
 import Router from "@koa/router";
 import { Op, Sequelize, type WhereOptions } from "sequelize";
+import { AuthorizationError } from "@server/errors";
 import auth from "@server/middlewares/authentication";
 import { rateLimiter } from "@server/middlewares/rateLimiter";
 import { transaction } from "@server/middlewares/transaction";
@@ -116,14 +117,21 @@ router.post(
 router.post(
   "apiKeys.delete",
   auth({
-    type: AuthenticationType.APP,
+    type: [AuthenticationType.APP, AuthenticationType.API],
   }),
   validate(T.APIKeysDeleteSchema),
   transaction(),
   async (ctx: APIContext<T.APIKeysDeleteReq>) => {
     const { id } = ctx.input.body;
-    const { user } = ctx.state.auth;
+    const { user, type, token } = ctx.state.auth;
     const { transaction } = ctx.state;
+
+    if (type === AuthenticationType.API) {
+      const authenticatingKey = await ApiKey.findByToken(token);
+      if (authenticatingKey?.id !== id) {
+        throw AuthorizationError("An API key can only delete itself");
+      }
+    }
 
     const key = await ApiKey.scope("withUser").findByPk(id, {
       lock: {

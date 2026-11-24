@@ -436,6 +436,60 @@ describe("#apiKeys.delete", () => {
     expect(res.status).toEqual(200);
   });
 
+  it("should allow a scoped api key to delete itself", async () => {
+    const user = await buildUser();
+    const apiKey = await buildApiKey({
+      userId: user.id,
+      scope: ["read", "/api/apiKeys.delete"],
+    });
+    const headers = { Authorization: `Bearer ${apiKey.value}` };
+
+    const res = await server.post("/api/apiKeys.delete", {
+      headers,
+      body: { id: apiKey.id },
+    });
+    expect(res.status).toEqual(200);
+    expect(await ApiKey.findByPk(apiKey.id)).toBeNull();
+
+    const reuse = await server.post("/api/apiKeys.delete", {
+      headers,
+      body: { id: apiKey.id },
+    });
+    expect(reuse.status).toEqual(401);
+  });
+
+  it("should not allow an api key to delete a different api key", async () => {
+    const user = await buildUser();
+    const apiKey = await buildApiKey({
+      userId: user.id,
+      scope: ["read", "/api/apiKeys.delete"],
+    });
+    const otherApiKey = await buildApiKey({ userId: user.id });
+
+    const res = await server.post("/api/apiKeys.delete", {
+      headers: { Authorization: `Bearer ${apiKey.value}` },
+      body: { id: otherApiKey.id },
+    });
+    expect(res.status).toEqual(403);
+    expect(await ApiKey.findByPk(otherApiKey.id)).not.toBeNull();
+    expect(await ApiKey.findByPk(apiKey.id)).not.toBeNull();
+  });
+
+  it("should not allow an api key without the delete scope", async () => {
+    const user = await buildUser();
+    const apiKey = await buildApiKey({
+      userId: user.id,
+      scope: ["read"],
+    });
+
+    const res = await server.post("/api/apiKeys.delete", {
+      headers: { Authorization: `Bearer ${apiKey.value}` },
+      body: { id: apiKey.id },
+    });
+    expect(res.status).toEqual(403);
+    expect(await ApiKey.findByPk(apiKey.id)).not.toBeNull();
+  });
+
   it("should require authentication", async () => {
     const res = await server.post("/api/apiKeys.delete");
     expect(res.status).toEqual(401);
