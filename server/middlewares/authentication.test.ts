@@ -635,6 +635,55 @@ if (header === "x-auth-request-email") {
       });
     });
 
+    describe("with restricted transports", () => {
+      function authenticateVia(
+        transports: NonNullable<Parameters<typeof auth>[0]>["transports"],
+        email: string
+      ) {
+        const state = {} as DefaultState;
+        const headers: Record<string, string> = {
+          "x-auth-request-email": email,
+          [EDGE_SECRET_HEADER]: EDGE_SECRET,
+        };
+        const run = auth({ transports })(
+          buildMockContext({
+            request: {
+              get: vi.fn(
+                (header: string) => headers[header.toLowerCase()] ?? ""
+              ),
+            },
+            cookies: { get: vi.fn(() => undefined), set: vi.fn() },
+            state,
+            ip: "127.0.0.1",
+            cache: {},
+          }),
+          vi.fn()
+        );
+        return { state, run };
+      }
+
+      it("should honour the proxy identity when the proxy transport is allowed", async () => {
+        const user = await buildUser();
+
+        const { state, run } = authenticateVia(
+          ["cookie", "proxy"],
+          user.email!
+        );
+        await run;
+
+        expect(state.auth.user.id).toEqual(user.id);
+        expect(state.auth.service).toEqual(FORWARDAUTH_SERVICE);
+      });
+
+      it("should ignore the proxy identity when the proxy transport is not allowed", async () => {
+        const user = await buildUser();
+
+        const { run } = authenticateVia(["cookie"], user.email!);
+
+        await expect(run).rejects.toThrow("Authentication required");
+      });
+    });
+
     it("should provision a new user when X-Auth-Request-Email is unknown", async () => {
       await buildTeam();
       const state = {} as DefaultState;
