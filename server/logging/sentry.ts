@@ -1,52 +1,12 @@
-import * as Sentry from "@sentry/node";
-import type { ErrorEvent } from "@sentry/node";
+import cluster from "node:cluster";
+import type * as SentryNode from "@sentry/node";
 import env from "@server/env";
 import type { AppContext } from "@server/types";
 
-if (env.SENTRY_DSN) {
-  Sentry.init({
-    dsn: env.SENTRY_DSN,
-    environment: env.ENVIRONMENT,
-    release: env.RELEASE,
-    maxBreadcrumbs: 0,
-    ignoreErrors: [
-      // These errors are expected in normal running of the application and
-      // don't need to be reported.
-      // Validation
-      "BadRequestError",
-      "SequelizeValidationError",
-      "SequelizeEmptyResultError",
-      "ValidationError",
-      "ForbiddenError",
-
-      // Authentication
-      "UnauthorizedError",
-      "TeamDomainRequiredError",
-      "GmailAccountCreationError",
-      "AuthRedirectError",
-      "UserSuspendedError",
-      "TooManyRequestsError",
-
-      // Client disconnects
-      "Premature close",
-    ],
-    beforeSend(event) {
-      try {
-        switch (event.level) {
-          case "warning":
-            // Sample warnings to reduce noise
-            if (Math.random() < 0.1) {
-              return null;
-            }
-            break;
-        }
-        return withRedactedHeaders(event);
-      } catch (_) {
-        return withRedactedHeaders(event);
-      }
-    },
-  });
-}
+// Sentry is only loaded in worker processes, as it is comparatively expensive
+// and the cluster primary only supervises the forked workers.
+const Sentry =
+  env.SENTRY_DSN && cluster.isWorker ? loadSentry(env.SENTRY_DSN) : undefined;
 
 const REDACTED_HEADERS = new Set([
   "x-mpass-edge-secret",
@@ -59,7 +19,9 @@ const REDACTED_HEADERS = new Set([
  * @param event the event about to be sent.
  * @returns the event with the edge secret and forwarded token removed.
  */
-export function withRedactedHeaders(event: ErrorEvent): ErrorEvent {
+export function withRedactedHeaders(
+  event: SentryNode.ErrorEvent
+): SentryNode.ErrorEvent {
   const headers = event.request?.headers;
   if (!headers) {
     return event;
@@ -80,7 +42,7 @@ export function requestErrorHandler(error: any, ctx: AppContext) {
     return;
   }
 
-  if (env.SENTRY_DSN) {
+  if (Sentry) {
     Sentry.withScope(function (scope) {
       const requestId = ctx.headers["x-request-id"];
 
@@ -115,3 +77,82 @@ export function requestErrorHandler(error: any, ctx: AppContext) {
 }
 
 export default Sentry;
+
+function loadSentry(dsn: string): typeof SentryNode {
+  // oxlint-disable-next-line typescript/no-require-imports -- kept lazy so Sentry stays off the startup path
+  const sentry = require("@sentry/node") as typeof SentryNode;
+  sentry.init({
+    dsn,
+    environment: env.ENVIRONMENT,
+    release: env.RELEASE,
+    maxBreadcrumbs: 0,
+    integrations: [
+      // Request bodies can contain document content and credentials.
+      sentry.httpIntegration({ maxIncomingRequestBodySize: "none" }),
+    ],
+    ignoreErrors: [
+      // These errors are expected in normal running of the application and
+      // don't need to be reported.
+      // Validation
+      "BadRequestError",
+      "SequelizeValidationError",
+      "SequelizeEmptyResultError",
+      "ValidationError",
+      "ForbiddenError",
+
+      // Authentication
+      "UnauthorizedError",
+      "TeamDomainRequiredError",
+      "AuthRedirectError",
+      "UserSuspendedError",
+      "TooManyRequestsError",
+
+      // Client disconnects
+      "Premature close",
+    ],
+    beforeSend(event) {
+      scrubRequest(event);
+
+      try {
+        switch (event.level) {
+          case "warning":
+            // Sample warnings to reduce noise
+            if (Math.random() < 0.1) {
+              return null;
+            }
+            break;
+        }
+        return withRedactedHeaders(event);
+      } catch (_) {
+        return withRedactedHeaders(event);
+      }
+    },
+  });
+  return sentry;
+}
+
+const SensitiveHeaderPattern =
+  /auth|cookie|token|secret|key|session|signature/i;
+
+/**
+ * Removes the request body, cookies, and sensitive headers from an event.
+ *
+ * @param event the event to scrub in place.
+ */
+function scrubRequest(event: SentryNode.ErrorEvent) {
+  const { request } = event;
+  if (!request) {
+    return;
+  }
+
+  delete request.data;
+  delete request.cookies;
+
+  if (request.headers) {
+    request.headers = Object.fromEntries(
+      Object.entries(request.headers).filter(
+        ([name]) => !SensitiveHeaderPattern.test(name)
+      )
+    );
+  }
+}

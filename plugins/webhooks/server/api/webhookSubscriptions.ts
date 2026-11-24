@@ -121,13 +121,15 @@ router.post(
 
     const webhookSubscription = await WebhookSubscription.findByPk(id, {
       rejectOnEmpty: true,
-      lock: transaction.LOCK.UPDATE,
+      lock: { level: transaction.LOCK.NO_KEY_UPDATE, of: WebhookSubscription },
       transaction,
     });
 
     authorize(user, "delete", webhookSubscription);
 
-    await webhookSubscription.destroyWithCtx(ctx);
+    await webhookSubscription.destroyWithCtx(ctx, {
+      data: { name: webhookSubscription.name },
+    });
 
     ctx.body = {
       success: true,
@@ -150,19 +152,23 @@ router.post(
 
     const webhookSubscription = await WebhookSubscription.findByPk(id, {
       rejectOnEmpty: true,
-      lock: transaction.LOCK.UPDATE,
+      lock: { level: transaction.LOCK.NO_KEY_UPDATE, of: WebhookSubscription },
       transaction,
     });
 
     authorize(user, "update", webhookSubscription);
 
-    await webhookSubscription.updateWithCtx(ctx, {
-      name,
-      url,
-      events: compact(events),
-      enabled: true,
-      secret: isEmpty(secret) ? undefined : secret,
-    });
+    await webhookSubscription.updateWithCtx(
+      ctx,
+      {
+        name,
+        url,
+        events: compact(events),
+        enabled: true,
+        secret: secret === "" ? null : secret,
+      },
+      { data: { name } }
+    );
 
     ctx.body = {
       data: presentWebhookSubscription(webhookSubscription),

@@ -54,7 +54,9 @@ export function templateTools(server: McpServer, scopes: string[]) {
         description:
           "Lists document templates the user has access to, including workspace-wide templates and templates within accessible collections. Each result includes the template body as markdown. To create a document from a template unchanged, pass its ID as templateId to create_document. To adapt it first, modify the returned text and pass it as the text parameter to create_document — no separate fetch is needed.",
         annotations: {
+          destructiveHint: false,
           idempotentHint: true,
+          openWorldHint: false,
           readOnlyHint: true,
         },
         inputSchema: z.object({
@@ -107,7 +109,7 @@ export function templateTools(server: McpServer, scopes: string[]) {
                 userId: user.id,
               });
               authorize(user, "read", collection);
-              where[Op.and].push({ collectionId });
+              where[Op.and].push({ collectionId: collection.id });
             } else {
               where[Op.and].push({
                 [Op.or]: [

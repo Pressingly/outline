@@ -2,6 +2,7 @@ import { t } from "i18next";
 import Router from "@koa/router";
 import { escapeRegExp } from "es-toolkit/compat";
 import queryString from "query-string";
+import { Op } from "sequelize";
 import { z } from "zod";
 import { toError } from "@shared/utils/error";
 import { IntegrationService, IntegrationType } from "@shared/types";
@@ -224,7 +225,7 @@ router.post(
         attachments: [
           {
             text: t(
-              "To search your workspace use {{ command }}.\nType {{ command2 }} help to display this help text.",
+              "To search your workspace, use {{ command }}.\nType {{ command2 }} help to display this help text.",
               {
                 command: `/outline keyword`,
                 command2: `/outline`,
@@ -402,6 +403,7 @@ async function findUserForRequest(
         model: User,
         as: "user",
         required: true,
+        where: { suspendedAt: { [Op.is]: null } },
       },
       {
         model: Team,
@@ -439,6 +441,7 @@ async function findUserForRequest(
         model: User,
         as: "user",
         required: true,
+        where: { suspendedAt: { [Op.is]: null } },
         include: [
           {
             model: Team,

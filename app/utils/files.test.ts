@@ -1,7 +1,7 @@
 import { extname, toDropzoneAccept } from "./files";
 
 describe("#extname", () => {
-  test("should extract file extension from string", () => {
+  it("should extract file extension from string", () => {
     expect(extname("one.doc")).toBe(".doc");
     expect(extname("one.test.ts")).toBe(".ts");
     expect(extname(".DS_Store")).toBe("");
@@ -19,5 +19,18 @@ describe("#toDropzoneAccept", () => {
       "image/heic": [".heic", ".heif"],
       "image/heif": [],
     });
+  });
+
+  it("should keep extensions when there are no mime types", () => {
+    const accept = toDropzoneAccept([".png", ".jpg"]);
+    const entries = Object.entries(accept);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0][0]).toMatch(/^application\/x-/);
+    expect(entries[0][1]).toEqual([".png", ".jpg"]);
+  });
+
+  it("should return an empty map when there are no types", () => {
+    expect(toDropzoneAccept([])).toEqual({});
   });
 });

@@ -24,6 +24,7 @@ export enum IntegrationService {
   Umami = "umami",
   GitHub = "github",
   GitLab = "gitlab",
+  Gitea = "gitea",
   Linear = "linear",
   Figma = "figma",
   Notion = "notion",
@@ -52,21 +53,6 @@ export const ImportableIntegrationService = {
   JSON: IntegrationService.JSON,
 } as const;
 
-/** Integration services that are issue trackers. */
-export type IssueTrackerIntegrationService = Extract<
-  IntegrationService,
-  | IntegrationService.GitHub
-  | IntegrationService.GitLab
-  | IntegrationService.Linear
->;
-
-/** Runtime values of `IssueTrackerIntegrationService`. */
-export const IssueTrackerIntegrationService = {
-  GitHub: IntegrationService.GitHub,
-  GitLab: IntegrationService.GitLab,
-  Linear: IntegrationService.Linear,
-} as const;
-
 /** Integration services that can be created through the API. */
 export type UserCreatableIntegrationService = Extract<
   IntegrationService,
@@ -88,30 +74,28 @@ export const UserCreatableIntegrationService = {
   GitLab: IntegrationService.GitLab,
 } as const;
 
+/** The settings stored on an embed integration, plugins augment it with their keys. */
+export interface EmbedIntegrationSettings {
+  url?: string;
+}
+
+/** The settings stored on a linked account integration, plugins augment it with their keys. */
+// oxlint-disable-next-line typescript/no-empty-object-type -- populated by module augmentation.
+export interface LinkedAccountIntegrationSettings {}
+
+// Mapped copies, because interfaces are not assignable to JSON index signatures.
+type EmbedSettings = Pick<
+  EmbedIntegrationSettings,
+  keyof EmbedIntegrationSettings
+>;
+type LinkedAccountSettings = Pick<
+  LinkedAccountIntegrationSettings,
+  keyof LinkedAccountIntegrationSettings
+>;
+
 /** The settings stored on an integration, by integration type. */
 export type IntegrationSettings<T> = T extends IntegrationType.Embed
-  ? {
-      url?: string;
-      github?: {
-        installation: {
-          id: number;
-          account: { id: number; name: string; avatarUrl: string };
-        };
-      };
-      gitlab?: {
-        url?: string;
-        installation?: {
-          id: number;
-          account: { id: number; name: string; avatarUrl: string };
-        };
-      };
-      linear?: {
-        workspace: { id: string; name: string; key: string; logoUrl?: string };
-      };
-      diagrams?: {
-        url: string;
-      };
-    }
+  ? EmbedSettings
   : T extends IntegrationType.Analytics
     ? { measurementId: string; instanceUrl?: string; scriptName?: string }
     : T extends IntegrationType.Post
@@ -123,45 +107,10 @@ export type IntegrationSettings<T> = T extends IntegrationType.Embed
               externalWorkspace: { id: string; name: string; iconUrl?: string };
             }
           : T extends IntegrationType.LinkedAccount
-            ? {
-                slack?: { serviceTeamId: string; serviceUserId: string };
-                figma?: {
-                  account: {
-                    id: string;
-                    name: string;
-                    email: string;
-                    avatarUrl: string;
-                  };
-                };
-              }
+            ? LinkedAccountSettings
             :
                 | { url: string }
-                | {
-                    github?: {
-                      installation: {
-                        id: number;
-                        account: {
-                          id?: number;
-                          name: string;
-                          avatarUrl?: string;
-                        };
-                      };
-                    };
-                    gitlab?: {
-                      url?: string;
-                      installation?: {
-                        id: number;
-                        account: {
-                          id?: number;
-                          name: string;
-                          avatarUrl?: string;
-                        };
-                      };
-                    };
-                    diagrams?: {
-                      url: string;
-                    };
-                  }
+                | EmbedSettings
                 | { serviceTeamId: string }
                 | {
                     measurementId: string;

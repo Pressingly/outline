@@ -1,7 +1,8 @@
-// @vitest-isolate true
 import { faker } from "@faker-js/faker";
 import { randomUUID } from "node:crypto";
+import { AUTH_TYPE_SSO } from "@shared/constants";
 import { Scope } from "@shared/types";
+import env from "@server/env";
 import {
   buildApiKey,
   buildOAuthAuthentication,
@@ -11,14 +12,7 @@ import {
   buildSubdomain,
 } from "@server/test/factories";
 import { getTestServer, setSelfHosted } from "@server/test/support";
-
-const mockTeamInSessionId = randomUUID();
-
-vi.mock("@server/utils/authentication", () => ({
-  getSessionsInCookie() {
-    return { [mockTeamInSessionId]: {} };
-  },
-}));
+import { EDGE_SECRET_HEADER } from "@server/utils/mpassEdgeTrust";
 
 const server = getTestServer();
 
@@ -26,9 +20,7 @@ describe("#auth.info", () => {
   it("should return current authentication", async () => {
     const team = await buildTeam();
     const team2 = await buildTeam();
-    const team3 = await buildTeam({
-      id: mockTeamInSessionId,
-    });
+    const team3 = await buildTeam();
 
     const user = await buildUser({ teamId: team.id });
     await buildUser();
@@ -36,7 +28,20 @@ describe("#auth.info", () => {
       teamId: team2.id,
       email: user.email,
     });
-    const res = await server.post("/api/auth.info", user);
+    const res = await server.post("/api/auth.info", user, {
+      headers: {
+        Host: "app.outline.dev",
+        Cookie: `sessions=${encodeURIComponent(
+          JSON.stringify({
+            [team3.id]: {
+              name: team3.name,
+              logoUrl: team3.avatarUrl,
+              url: team3.url,
+            },
+          })
+        )}`,
+      },
+    });
     const body = await res.json();
     expect(res.status).toEqual(200);
 
@@ -66,6 +71,36 @@ describe("#auth.info", () => {
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data.collaborationToken).toBeTruthy();
+  });
+
+  describe("with an edge-verified ForwardAuth identity", () => {
+    const edgeSecret = "e".repeat(64);
+
+    beforeEach(() => {
+      env.AUTH_TYPE = AUTH_TYPE_SSO;
+      env.MPASS_EDGE_SECRET = edgeSecret;
+    });
+
+    afterEach(() => {
+      env.AUTH_TYPE = undefined;
+      env.MPASS_EDGE_SECRET = "";
+    });
+
+    it("should return the session and issue the session cookie", async () => {
+      const user = await buildUser();
+      const res = await server.post("/api/auth.info", {
+        headers: {
+          "x-auth-request-email": user.email!,
+          [EDGE_SECRET_HEADER]: edgeSecret,
+        },
+      });
+      const body = await res.json();
+
+      expect(res.status).toEqual(200);
+      expect(body.data.user.id).toEqual(user.id);
+      expect(body.data.collaborationToken).toBeTruthy();
+      expect(res.headers.get("set-cookie")).toContain("accessToken=");
+    });
   });
 
   it("should not return a collaboration token for an API key", async () => {
@@ -282,6 +317,8 @@ describe("#auth.config", () => {
     expect(body.data.providers[1].name).toBe("Passkeys");
   });
 
+  // Self-hosted auth.config reads the newest team, which other test files create in parallel.
+  // oxlint-disable-next-line vitest/no-disabled-tests
   describe.skip("self hosted", () => {
     beforeEach(setSelfHosted);
 

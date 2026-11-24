@@ -414,24 +414,47 @@ describe("Authentication middleware", () => {
     );
   });
 
-  it("should allow passing transfer token as a GET param", async () => {
+  it("should not accept transfer token as a GET param", async () => {
     const state = {} as DefaultState;
     const user = await buildUser();
     const authMiddleware = auth();
-    await authMiddleware(
-      buildMockContext({
-        request: {
-          get: vi.fn(() => null),
-          query: {
-            token: user.getTransferToken(),
+
+    await expect(
+      authMiddleware(
+        buildMockContext({
+          request: {
+            get: vi.fn(() => null),
+            query: {
+              token: user.getTransferToken(),
+            },
           },
-        },
-        state,
-        cache: {},
-      }),
-      vi.fn()
+          state,
+          cache: {},
+        }),
+        vi.fn()
+      )
+    ).rejects.toThrow(
+      "Session token must be passed in the cookie or Authorization header"
     );
-    expect(state.auth.user.id).toEqual(user.id);
+  });
+
+  it("should not accept transfer token in the Authorization header", async () => {
+    const state = {} as DefaultState;
+    const user = await buildUser();
+    const authMiddleware = auth();
+
+    await expect(
+      authMiddleware(
+        buildMockContext({
+          request: {
+            get: vi.fn(() => `Bearer ${user.getTransferToken()}`),
+          },
+          state,
+          cache: {},
+        }),
+        vi.fn()
+      )
+    ).rejects.toThrow("Invalid token");
   });
 
   it("should return an error for suspended users", async () => {
@@ -609,6 +632,55 @@ if (header === "x-auth-request-email") {
         expect(state.auth.user.id).toEqual(user.id);
         expect(state.auth.service).toEqual(FORWARDAUTH_SERVICE);
         expect(cookieNames).toEqual([]);
+      });
+    });
+
+    describe("with restricted transports", () => {
+      function authenticateVia(
+        transports: NonNullable<Parameters<typeof auth>[0]>["transports"],
+        email: string
+      ) {
+        const state = {} as DefaultState;
+        const headers: Record<string, string> = {
+          "x-auth-request-email": email,
+          [EDGE_SECRET_HEADER]: EDGE_SECRET,
+        };
+        const run = auth({ transports })(
+          buildMockContext({
+            request: {
+              get: vi.fn(
+                (header: string) => headers[header.toLowerCase()] ?? ""
+              ),
+            },
+            cookies: { get: vi.fn(() => undefined), set: vi.fn() },
+            state,
+            ip: "127.0.0.1",
+            cache: {},
+          }),
+          vi.fn()
+        );
+        return { state, run };
+      }
+
+      it("should honour the proxy identity when the proxy transport is allowed", async () => {
+        const user = await buildUser();
+
+        const { state, run } = authenticateVia(
+          ["cookie", "proxy"],
+          user.email!
+        );
+        await run;
+
+        expect(state.auth.user.id).toEqual(user.id);
+        expect(state.auth.service).toEqual(FORWARDAUTH_SERVICE);
+      });
+
+      it("should ignore the proxy identity when the proxy transport is not allowed", async () => {
+        const user = await buildUser();
+
+        const { run } = authenticateVia(["cookie"], user.email!);
+
+        await expect(run).rejects.toThrow("Authentication required");
       });
     });
 

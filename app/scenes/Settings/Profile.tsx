@@ -5,7 +5,6 @@ import { Trans, useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { AUTH_TYPE_SSO } from "@shared/constants";
 import { errToString } from "@shared/utils/error";
-import Button from "~/components/Button";
 import Heading from "~/components/Heading";
 import Input from "~/components/Input";
 import Scene from "~/components/Scene";
@@ -21,19 +20,42 @@ import SettingRow from "./components/SettingRow";
 const Profile = () => {
   const user = useCurrentUser();
   const { dialogs } = useStores();
-  const form = React.useRef<HTMLFormElement>(null);
   const [name, setName] = React.useState<string>(user.name);
   const { t } = useTranslation();
   const canChangeEmail = env.AUTH_TYPE !== AUTH_TYPE_SSO;
   const showEmail = env.EMAIL_ENABLED || !canChangeEmail;
 
-  const handleSubmit = async (ev: React.SyntheticEvent) => {
+  const handleSubmit = (ev: React.FormEvent) => {
     ev.preventDefault();
+  };
+
+  const handleKeyDown = (ev: React.KeyboardEvent) => {
+    // The name saves on blur, so Enter saves it.
+    if (
+      ev.key === "Enter" &&
+      !ev.nativeEvent.isComposing &&
+      ev.target instanceof HTMLInputElement &&
+      ev.currentTarget.contains(ev.target)
+    ) {
+      ev.preventDefault();
+      ev.target.blur();
+    }
+  };
+
+  const handleNameBlur = async () => {
+    if (name === user.name) {
+      return;
+    }
+    if (!name.trim()) {
+      setName(user.name);
+      return;
+    }
 
     try {
       await user.save({ name });
       toast.success(t("Profile saved"));
     } catch (err) {
+      setName(user.name);
       toast.error(errToString(err));
     }
   };
@@ -60,9 +82,6 @@ const Profile = () => {
     toast.error(error || t("Unable to upload new profile picture"));
   };
 
-  const isValid = form.current?.checkValidity();
-  const { isSaving } = user;
-
   return (
     <Scene title={t("Profile")} icon={<ProfileIcon />}>
       <Heading>{t("Profile")}</Heading>
@@ -70,7 +89,7 @@ const Profile = () => {
         <Trans>Manage how you appear to other members of the workspace.</Trans>
       </Text>
 
-      <form onSubmit={handleSubmit} ref={form}>
+      <form onSubmit={handleSubmit} onKeyDown={handleKeyDown}>
         <SettingRow
           label={t("Photo")}
           name="avatarUrl"
@@ -96,6 +115,7 @@ const Profile = () => {
             autoComplete="name"
             value={name}
             onChange={handleNameChange}
+            onBlur={handleNameBlur}
             maxLength={UserValidation.maxNameLength}
             showCharacterCount
             required
@@ -112,10 +132,6 @@ const Profile = () => {
             />
           </SettingRow>
         )}
-
-        <Button type="submit" disabled={isSaving || !isValid}>
-          {isSaving ? `${t("Saving")}…` : t("Save")}
-        </Button>
       </form>
     </Scene>
   );

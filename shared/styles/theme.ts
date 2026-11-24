@@ -28,7 +28,7 @@ const defaultColors: Colors = {
   yellow: "#EDBA07",
   warmGrey: "hsl(212 31% 95% / 1)",
   danger: "#ed2651",
-  warning: "#f08a24",
+  warning: "#f05a28",
   success: "#3ad984",
   info: "#a0d3e8",
   brand: {
@@ -109,10 +109,10 @@ const buildBaseTheme = (input: Partial<Colors>) => {
       0.1,
       mix(0.5, colors.brand.blue, colors.almostBlack)
     ),
-    noticeWarningBackground: colors.brand.yellow,
+    noticeWarningBackground: colors.warning,
     noticeWarningText: saturate(
       0.1,
-      mix(0.5, colors.brand.yellow, colors.almostBlack)
+      mix(0.5, colors.warning, colors.almostBlack)
     ),
     noticeSuccessBackground: colors.brand.green,
     noticeSuccessText: saturate(
@@ -274,7 +274,7 @@ export const buildDarkTheme = (input: Partial<Colors>): DefaultTheme => {
     horizontalRule: lighten(0.1, colors.almostBlack),
     noticeInfoText: mix(0.5, colors.slate, colors.white),
     noticeTipText: mix(0.5, colors.brand.blue, colors.white),
-    noticeWarningText: mix(0.5, colors.brand.yellow, colors.white),
+    noticeWarningText: mix(0.5, colors.warning, colors.white),
     noticeSuccessText: mix(0.5, colors.brand.green, colors.white),
     progressBarBackground: colors.slate,
     scrollbarBackground: colors.black,

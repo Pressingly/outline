@@ -1,5 +1,10 @@
 import { addDays } from "date-fns";
-import { buildUser, buildCollection } from "@server/test/factories";
+import {
+  buildAdmin,
+  buildApiKey,
+  buildUser,
+  buildCollection,
+} from "@server/test/factories";
 import {
   getTestServer,
   setCloudHosted,
@@ -79,6 +84,31 @@ describe("auth/redirect", () => {
 
     expect(res.status).toEqual(401);
   });
+
+  it("should not accept a transfer token twice", async () => {
+    const user = await buildUser();
+    const token = user.getTransferToken();
+
+    const first = await server.get(`/auth/redirect?token=${token}`, {
+      redirect: "manual",
+    });
+    expect(first.status).toEqual(302);
+
+    const second = await server.get(`/auth/redirect?token=${token}`, {
+      redirect: "manual",
+    });
+    expect(second.status).toEqual(401);
+  });
+
+  it("should not accept a transfer token on the API", async () => {
+    const user = await buildUser();
+    const res = await server.post("/api/auth.info", {
+      headers: {
+        Authorization: `Bearer ${user.getTransferToken()}`,
+      },
+    });
+    expect(res.status).toEqual(401);
+  });
 });
 
 describe("auth provider routes", () => {
@@ -98,5 +128,37 @@ describe("auth provider routes", () => {
     const location = new URL(res.headers.get("location") ?? "");
     const state = verifyOAuthState(location.searchParams.get("state") ?? "");
     expect(state.actorId).toEqual(user.id);
+  });
+
+  it("should not use an API key in the query as the actor", async () => {
+    const admin = await buildAdmin();
+    const apiKey = await buildApiKey({ userId: admin.id });
+    const res = await server.get(`/auth/google?token=${apiKey.value}`, {
+      redirect: "manual",
+    });
+    expect(res.status).toEqual(302);
+
+    const location = new URL(res.headers.get("location") ?? "");
+    const state = verifyOAuthState(location.searchParams.get("state") ?? "");
+    expect(state.actorId).toBeUndefined();
+  });
+
+  it("should prefer the session cookie over a token in the query", async () => {
+    const admin = await buildAdmin();
+    const victim = await buildUser();
+    const res = await server.get(
+      `/auth/google?token=${admin.getTransferToken()}`,
+      {
+        redirect: "manual",
+        headers: {
+          Cookie: `accessToken=${victim.getSessionToken()}`,
+        },
+      }
+    );
+    expect(res.status).toEqual(302);
+
+    const location = new URL(res.headers.get("location") ?? "");
+    const state = verifyOAuthState(location.searchParams.get("state") ?? "");
+    expect(state.actorId).toEqual(victim.id);
   });
 });

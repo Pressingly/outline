@@ -3,8 +3,8 @@ import { Trans, useTranslation } from "react-i18next";
 import styled from "styled-components";
 import Flex from "@shared/components/Flex";
 import { s } from "@shared/styles";
-import { parseDomain } from "@shared/utils/domains";
 import { getHostname, isLoopbackUri } from "@shared/utils/urls";
+import { isAppRootDomain } from "~/utils/urls";
 import { OAuthClientValidation } from "@shared/validations";
 import type OAuthClient from "~/models/oauth/OAuthClient";
 import ButtonLarge from "~/components/ButtonLarge";
@@ -15,7 +15,7 @@ import PageTitle from "~/components/PageTitle";
 import Text from "~/components/Text";
 import env from "~/env";
 import useCurrentTeam from "~/hooks/useCurrentTeam";
-import { useLoggedInSessions } from "~/hooks/useLoggedInSessions";
+import { useWorkspaceSessions } from "~/hooks/useWorkspaceSessions";
 import useQuery from "~/hooks/useQuery";
 import useRequest from "~/hooks/useRequest";
 import { client } from "~/utils/ApiClient";
@@ -36,8 +36,9 @@ import { TeamSwitcher } from "./components/TeamSwitcher";
 import { Form } from "~/components/primitives/Form";
 
 export default function OAuthAuthorize() {
+  const { t } = useTranslation();
   const team = useCurrentTeam({ rejectOnEmpty: false });
-  const sessions = useLoggedInSessions();
+  const sessions = useWorkspaceSessions();
 
   // We're self-hosted or on a team subdomain already, just show the authorize screen.
   if (team) {
@@ -45,11 +46,17 @@ export default function OAuthAuthorize() {
   }
 
   // Cloud hosted and on root domain – show the workspace switcher.
-  const isAppRoot =
-    parseDomain(window.location.hostname).host === parseDomain(env.URL).host;
-  const hasLoggedInSessions = Object.keys(sessions).length > 0;
-  if (isCloudHosted && hasLoggedInSessions && isAppRoot) {
-    return <TeamSwitcher sessions={sessions} />;
+  const hasRememberedWorkspaces = Object.keys(sessions).length > 0;
+  if (isCloudHosted && hasRememberedWorkspaces && isAppRootDomain()) {
+    return (
+      <TeamSwitcher
+        sessions={sessions}
+        description={t(
+          "Choose an {{ appName }} workspace or log in to continue connecting this app",
+          { appName: env.APP_NAME }
+        )}
+      />
+    );
   }
 
   return <Login />;
@@ -119,6 +126,9 @@ function Authorize() {
     if (redirectUri && !clientError) {
       const url = new URL(redirectUri);
       url.searchParams.set("error", "access_denied");
+      if (state) {
+        url.searchParams.set("state", state);
+      }
       window.location.href = url.toString();
       return;
     }
@@ -159,14 +169,14 @@ function Authorize() {
           {clientError instanceof NotFoundError ? (
             <Text as="p" type="secondary">
               {t(
-                "The OAuth client could not be found, please check the provided client ID"
+                "The OAuth client could not be found – please check the provided client ID"
               )}
               <Pre>{clientId}</Pre>
             </Text>
           ) : clientError instanceof BadRequestError ? (
             <Text as="p" type="secondary">
               {t(
-                "The OAuth client could not be loaded, please check the redirect URI is valid"
+                "The OAuth client could not be loaded – please check that the redirect URI is valid"
               )}
               <Pre>{redirectUri}</Pre>
             </Text>
@@ -180,7 +190,7 @@ function Authorize() {
           ) : clientError instanceof AuthorizationError ? (
             <Text as="p" type="secondary">
               {t(
-                "The OAuth client could not be loaded, please check your workspace subdomain is correct"
+                "The OAuth client could not be loaded – please check that your workspace subdomain is correct"
               )}
               <Pre>{clientError.message}</Pre>
             </Text>

@@ -49,7 +49,7 @@ const unsubscribe = async (ctx: APIContext<T.NotificationsUnsubscribeReq>) => {
 
   const user = await User.scope("withTeam").findByPk(userId, {
     rejectOnEmpty: true,
-    lock: transaction.LOCK.UPDATE,
+    lock: { level: transaction.LOCK.NO_KEY_UPDATE, of: User },
     transaction,
   });
 
@@ -218,12 +218,7 @@ router.post(
     });
     authorize(user, "update", notification);
 
-    if (!isUndefined(viewedAt)) {
-      notification.viewedAt = viewedAt;
-    }
-    if (!isUndefined(archivedAt)) {
-      notification.archivedAt = archivedAt;
-    }
+    notification.fill({ viewedAt, archivedAt });
     await notification.saveWithCtx(ctx);
 
     ctx.body = {

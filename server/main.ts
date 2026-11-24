@@ -1,3 +1,4 @@
+import "zod/compile";
 import http from "node:http";
 import https from "node:https";
 import type { AddressInfo, Socket } from "node:net";
@@ -36,9 +37,12 @@ export async function start(id: number, disconnect: () => void) {
   // Ensure plugins are loaded
   PluginManager.loadPlugins();
 
+  // Connect before services start, so that their first commands do not fail
+  await Redis.connectEphemeralClient();
+
   // Clear unfurl cache in development so code changes take effect immediately
   if (env.isDevelopment) {
-    void CacheHelper.clearData(RedisPrefixHelper.getUnfurlKey(""));
+    void CacheHelper.clearData(RedisPrefixHelper.getUnfurlPrefix());
   }
 
   // Find if SSL certs are available

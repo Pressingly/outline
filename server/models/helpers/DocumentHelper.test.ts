@@ -2,6 +2,7 @@ import Revision from "@server/models/Revision";
 import { buildCollection, buildDocument } from "@server/test/factories";
 import { ChangesetHelper } from "@shared/editor/lib/ChangesetHelper";
 import { EditorStyleHelper } from "@shared/editor/styles/EditorStyleHelper";
+import type { ProsemirrorData } from "@shared/types";
 import { HeadingPrefixStyle, TextEditMode } from "@shared/types";
 import { DocumentHelper } from "./DocumentHelper";
 import { ProsemirrorHelper } from "./ProsemirrorHelper";
@@ -530,6 +531,92 @@ describe("DocumentHelper", () => {
     });
   });
 
+  describe("applyMarkdownToDocument", () => {
+    it("should keep mention cards when the whole document is replaced", async () => {
+      const modelId = "6f4e9a32-5b1c-4d2e-9f3a-8b7c6d5e4f30";
+      const mention = (attrs: Record<string, string>) => ({
+        type: "paragraph",
+        content: [
+          {
+            type: "mention",
+            attrs: {
+              id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+              modelId,
+              display: "card",
+              ...attrs,
+            },
+          },
+        ],
+      });
+      const document = await buildDocument({
+        content: {
+          type: "doc",
+          content: [
+            mention({
+              type: "url",
+              label: "Example",
+              href: "https://example.com/a?b=c",
+            }),
+            mention({ type: "document", label: "Roadmap" }),
+            mention({ type: "collection", label: "Product" }),
+          ],
+        },
+      });
+
+      const markdown = await DocumentHelper.toMarkdown(document, {
+        includeTitle: false,
+      });
+      const result = DocumentHelper.applyMarkdownToDocument(
+        document,
+        markdown,
+        TextEditMode.Replace
+      );
+
+      const mentions: Array<Record<string, unknown>> = [];
+      DocumentHelper.toProsemirror(result).descendants((node) => {
+        if (node.type.name === "mention") {
+          mentions.push(node.attrs);
+        }
+      });
+      expect(mentions[0].href).toBe("https://example.com/a?b=c");
+      expect(mentions.map((attrs) => [attrs.type, attrs.display])).toEqual([
+        ["url", "card"],
+        ["document", "card"],
+        ["collection", "card"],
+      ]);
+    });
+
+    it("should merge prepended text into the first paragraph", async () => {
+      const document = await buildDocument({ text: "Existing" });
+      const result = DocumentHelper.applyMarkdownToDocument(
+        document,
+        "x",
+        TextEditMode.Prepend
+      );
+      expect(result.text).toBe("xExisting");
+    });
+
+    it("should merge prepended text that ends with spaces", async () => {
+      const document = await buildDocument({ text: "Existing" });
+      const result = DocumentHelper.applyMarkdownToDocument(
+        document,
+        "x  ",
+        TextEditMode.Prepend
+      );
+      expect(result.text).toBe("xExisting");
+    });
+
+    it("should not merge prepended text when trailing whitespace has a newline", async () => {
+      const document = await buildDocument({ text: "Existing" });
+      const result = DocumentHelper.applyMarkdownToDocument(
+        document,
+        "x \n ",
+        TextEditMode.Prepend
+      );
+      expect(result.text).toBe("x\n\nExisting");
+    });
+  });
+
   describe("parseMentions", () => {
     it("should not parse normal links as mentions", async () => {
       const document = await buildDocument({
@@ -557,151 +644,6 @@ More text
       expect(result[1].id).toBe("34095ac1-c808-45c0-8c6e-6c554497de64");
       expect(result[0].modelId).toBe("34095ac1-c808-45c0-8c6e-6c554497de64");
       expect(result[1].modelId).toBe("2767ba0e-ac5c-4533-b9cf-4f5fc456600e");
-    });
-  });
-
-  describe("toEmailDiff", () => {
-    it("should render a compact diff", async () => {
-      const before = new Revision({
-        title: "Title",
-        text: `
-This is a test paragraph
-
-- list item 1
-- list item 2
-
-:::info
-Content in an info block
-:::
-
-!!This is a placeholder!!
-
-==this is a highlight==
-
-- [ ] checklist item 1
-- [ ] checklist item 2
-- [x] checklist item 3
-
-same on both sides
-
-same on both sides
-
-same on both sides`,
-      });
-
-      const after = new Revision({
-        title: "Title",
-        text: `
-This is a test paragraph
-
-A new paragraph
-
-- list item 1
-- list item 2
-
-This is a new paragraph.
-
-!!This is a placeholder!!
-
-==this is a highlight==
-
-- [x] checklist item 1
-- [x] checklist item 2
-- [ ] checklist item 3
-- [ ] checklist item 4
-- [x] checklist item 5
-
-same on both sides
-
-same on both sides
-
-same on both sides`,
-      });
-
-      const html = await DocumentHelper.toEmailDiff(before, after);
-
-      // marks breaks in diff
-      expect(html).toContain("diff-context-break");
-
-      // changed list
-      expect(html).toContain("checklist item 1");
-      expect(html).toContain("checklist item 5");
-
-      // added
-      expect(html).toContain("A new paragraph");
-
-      // Retained for context above added paragraph
-      expect(html).toContain("This is a test paragraph");
-
-      // removed
-      expect(html).toContain("Content in an info block");
-
-      // unchanged
-      expect(html).not.toContain("same on both sides");
-      expect(html).not.toContain("this is a highlight");
-    });
-
-    it("should render diff for mark changes", async () => {
-      const before = new Revision({
-        title: "Title",
-        text: `
-This is a test paragraph`,
-      });
-
-      const after = new Revision({
-        title: "Title",
-        text: `
-This is a [test paragraph](https://example.net)`,
-      });
-
-      const html = await DocumentHelper.toEmailDiff(before, after);
-      expect(html).toBeDefined();
-    });
-
-    it("should return undefined if no diff is detected", async () => {
-      const before = new Revision({
-        title: "Title",
-        text: "Same text",
-      });
-
-      const after = new Revision({
-        title: "Title",
-        text: "Same text",
-      });
-
-      const html = await DocumentHelper.toEmailDiff(before, after);
-      expect(html).toBeUndefined();
-    });
-
-    it("should trim table rows to show minimal diff including header", async () => {
-      const before = new Revision({
-        title: "Title",
-        text: `
-| Syntax      | Description |
-| ----------- | ----------- |
-| Header      | Title       |
-| Paragraph   | Text        |
-| Content     | Another     |
-| More        | Content     |
-| Long        | Table       |`,
-      });
-
-      const after = new Revision({
-        title: "Title",
-        text: `
-| Syntax      | Description |
-| ----------- | ----------- |
-| Header      | Title       |
-| Paragraph   | Text        |
-| Content     | Changed     |
-| More        | Content     |
-| Long        | Table       |`,
-      });
-
-      const html = await DocumentHelper.toEmailDiff(before, after);
-
-      expect(html).toContain("Changed");
-      expect(html).not.toContain("Long");
     });
   });
 
@@ -1372,6 +1314,47 @@ In a cell
     });
   });
 
+  describe("getPreviewImage", () => {
+    const image = (src: string, width?: number, height?: number) => ({
+      type: "paragraph",
+      content: [{ type: "image", attrs: { src, alt: "", width, height } }],
+    });
+
+    it("returns the first image larger than the minimum size", () => {
+      const data: ProsemirrorData = {
+        type: "doc",
+        content: [
+          image("/icon.png", 32, 32),
+          image("/narrow.png", 400, 80),
+          image("/large.png", 800, 600),
+          image("/second.png", 800, 600),
+        ],
+      };
+      expect(DocumentHelper.getPreviewImage(data)).toBe("/large.png");
+    });
+
+    it("skips images without a stored size", () => {
+      const data: ProsemirrorData = {
+        type: "doc",
+        content: [image("/unknown.png")],
+      };
+      expect(DocumentHelper.getPreviewImage(data)).toBeUndefined();
+    });
+
+    it("finds images nested in other blocks", () => {
+      const data: ProsemirrorData = {
+        type: "doc",
+        content: [
+          {
+            type: "blockquote",
+            content: [image("/quoted.png", 200, 200)],
+          },
+        ],
+      };
+      expect(DocumentHelper.getPreviewImage(data)).toBe("/quoted.png");
+    });
+  });
+
   describe("getAnchorContent", () => {
     it("should return the section content for a matching heading anchor", async () => {
       const document = await buildDocument({
@@ -1524,6 +1507,116 @@ Install instructions here.`,
         DocumentHelper.getAnchorContent(document, "h-missing")
       ).toBeUndefined();
       expect(DocumentHelper.getAnchorContent(document, "")).toBeUndefined();
+    });
+  });
+
+  describe("isContentEqual", () => {
+    const paragraph = (text: string, marks?: ProsemirrorData["marks"]) => ({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text, marks }] },
+      ],
+    });
+    const comment = {
+      type: "comment",
+      attrs: { id: "comment-id", userId: "user-id" },
+    };
+
+    it("should return true for identical content", async () => {
+      const document = await buildDocument({ content: paragraph("Hello") });
+      const revision = Revision.buildFromDocument(document);
+
+      expect(DocumentHelper.isContentEqual(document, revision)).toBe(true);
+    });
+
+    it("should return false when marks differ and none are ignored", async () => {
+      const document = await buildDocument({ content: paragraph("Hello") });
+      const revision = Revision.buildFromDocument(document);
+      document.content = paragraph("Hello", [comment]);
+
+      expect(DocumentHelper.isContentEqual(document, revision)).toBe(false);
+    });
+
+    it("should return true when only ignored marks differ", async () => {
+      const document = await buildDocument({ content: paragraph("Hello") });
+      const revision = Revision.buildFromDocument(document);
+      document.content = paragraph("Hello", [comment]);
+
+      expect(
+        DocumentHelper.isContentEqual(document, revision, {
+          ignoreMarks: ["comment"],
+        })
+      ).toBe(true);
+    });
+
+    it("should return false when the text differs", async () => {
+      const document = await buildDocument({ content: paragraph("Hello") });
+      const revision = Revision.buildFromDocument(document);
+      document.content = paragraph("Hello world", [comment]);
+
+      expect(
+        DocumentHelper.isContentEqual(document, revision, {
+          ignoreMarks: ["comment"],
+        })
+      ).toBe(false);
+    });
+
+    it("should return true when a comment covers part of a text node", async () => {
+      const document = await buildDocument({
+        content: paragraph("Hello world"),
+      });
+      const revision = Revision.buildFromDocument(document);
+      document.content = {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: "Hello " },
+              { type: "text", text: "world", marks: [comment] },
+            ],
+          },
+        ],
+      };
+
+      expect(
+        DocumentHelper.isContentEqual(document, revision, {
+          ignoreMarks: ["comment"],
+        })
+      ).toBe(true);
+    });
+
+    it("should return true when only an image comment differs", async () => {
+      const image = (marks?: ProsemirrorData["marks"]) => ({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "image",
+                attrs: { src: "https://example.com/image.png", marks },
+              },
+            ],
+          },
+        ],
+      });
+      const document = await buildDocument({ content: image() });
+      const revision = Revision.buildFromDocument(document);
+      document.content = image([comment]);
+
+      expect(
+        DocumentHelper.isContentEqual(document, revision, {
+          ignoreMarks: ["comment"],
+        })
+      ).toBe(true);
+
+      document.content = image([]);
+      expect(
+        DocumentHelper.isContentEqual(document, revision, {
+          ignoreMarks: ["comment"],
+        })
+      ).toBe(true);
     });
   });
 });

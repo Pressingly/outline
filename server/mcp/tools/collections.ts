@@ -54,7 +54,9 @@ export function collectionTools(server: McpServer, scopes: string[]) {
         description:
           "Lists all collections the authenticated user has access to. Returns a summary of each collection.",
         annotations: {
+          destructiveHint: false,
           idempotentHint: true,
+          openWorldHint: false,
           readOnlyHint: true,
         },
         inputSchema: z.object({
@@ -106,29 +108,30 @@ export function collectionTools(server: McpServer, scopes: string[]) {
               [Op.and]: and,
             };
 
-            const collections = await Collection.scope({
-              method: ["withMembership", user.id],
-            }).findAll({
-              where,
-              order: [
-                Sequelize.literal('"collection"."index" collate "C"'),
-                ["updatedAt", "DESC"],
-              ],
-              offset: offset ?? 0,
-              limit: limit ?? 25,
-            });
+            const [collections, exactMatchCandidate] = await Promise.all([
+              Collection.scope({
+                method: ["withMembership", user.id],
+              }).findAll({
+                where,
+                order: [
+                  Sequelize.literal('"collection"."index" collate "C"'),
+                  ["updatedAt", "DESC"],
+                ],
+                offset: offset ?? 0,
+                limit: limit ?? 25,
+              }),
 
-            // If the query looks like a collection ID or urlId, try direct
-            // lookup first so exact matches appear at the top of results.
-            let exactMatch: Collection | null = null;
-            if (query && UrlHelper.SLUG_URL_REGEX.test(query)) {
-              exactMatch = await Collection.findByPk(query, {
-                userId: user.id,
-              });
-              if (exactMatch && !collectionIds.includes(exactMatch.id)) {
-                exactMatch = null;
-              }
-            }
+              // If the query looks like a collection ID or urlId, try direct
+              // lookup so exact matches appear at the top of results.
+              query && UrlHelper.SLUG_URL_REGEX.test(query)
+                ? Collection.findByPk(query, { userId: user.id })
+                : null,
+            ]);
+            const exactMatch =
+              exactMatchCandidate &&
+              collectionIds.includes(exactMatchCandidate.id)
+                ? exactMatchCandidate
+                : null;
 
             const matchedCollections = [
               ...(exactMatch ? [exactMatch] : []),
@@ -175,7 +178,9 @@ export function collectionTools(server: McpServer, scopes: string[]) {
         description:
           "Creates a new collection. Collections are used to organize documents.",
         annotations: {
+          destructiveHint: false,
           idempotentHint: false,
+          openWorldHint: false,
           readOnlyHint: false,
         },
         inputSchema: z.object({
@@ -236,7 +241,9 @@ export function collectionTools(server: McpServer, scopes: string[]) {
         description:
           "Updates an existing collection by its ID. Only the fields provided will be updated.",
         annotations: {
+          destructiveHint: true,
           idempotentHint: false,
+          openWorldHint: false,
           readOnlyHint: false,
         },
         inputSchema: z.object({
@@ -323,7 +330,9 @@ export function collectionTools(server: McpServer, scopes: string[]) {
         description:
           "Deletes a collection by its ID. Non-archived documents within the collection will also be deleted. Set archive to true to archive the collection instead of deleting it.",
         annotations: {
+          destructiveHint: true,
           idempotentHint: false,
+          openWorldHint: false,
           readOnlyHint: false,
         },
         inputSchema: z.object({
