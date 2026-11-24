@@ -165,13 +165,16 @@ export function useDocumentSave({
       setIsPublishing(!!options.publish);
 
       try {
-        const savedDocument = await document.save(undefined, options);
+        const savedDocument = await document.save(undefined, {
+          publish: options.publish,
+          autosave: options.autosave,
+        });
         isEditorDirtyRef.current = false;
         setIsEditorDirty(false);
 
         if (options.done) {
           history.push({
-            pathname: savedDocument.url,
+            pathname: savedDocument.path,
             state: { sidebarContext },
           });
           ui.setActiveDocument(savedDocument);

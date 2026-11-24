@@ -35,15 +35,16 @@ router.post(
       where = { ...where, service };
     }
 
-    // Linked account is special as these are user-specific, other integrations are workspace-wide.
+    // Linked account is special as these are user-specific, other integrations
+    // are workspace-wide. Guests only receive embeds, which the editor needs.
     where = {
       ...where,
       [Op.or]: [
         { userId: user.id, type: IntegrationType.LinkedAccount },
         {
-          type: {
-            [Op.not]: IntegrationType.LinkedAccount,
-          },
+          type: user.isGuest
+            ? IntegrationType.Embed
+            : { [Op.not]: IntegrationType.LinkedAccount },
         },
       ],
     };
@@ -129,17 +130,19 @@ router.post(
 
     const integration = await Integration.findByPk(id, {
       transaction,
-      lock: transaction.LOCK.UPDATE,
+      lock: transaction.LOCK.NO_KEY_UPDATE,
     });
     authorize(user, "update", integration);
 
-    if (integration.type === IntegrationType.Post) {
+    if (events !== undefined && integration.type === IntegrationType.Post) {
       integration.events = events.filter((event: string) =>
         ["documents.update", "documents.publish"].includes(event)
       );
     }
 
-    integration.settings = settings;
+    if (settings !== undefined) {
+      integration.settings = settings;
+    }
 
     await integration.saveWithCtx(ctx);
 
@@ -163,7 +166,7 @@ router.post(
     const integration = await Integration.findByPk(id, {
       rejectOnEmpty: true,
       transaction,
-      lock: transaction.LOCK.UPDATE,
+      lock: transaction.LOCK.NO_KEY_UPDATE,
     });
     authorize(user, "delete", integration);
 

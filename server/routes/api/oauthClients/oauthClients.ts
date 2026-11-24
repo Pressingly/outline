@@ -154,12 +154,14 @@ router.post(
 
     const oauthClient = await OAuthClient.findByPk(id, {
       transaction,
-      lock: transaction.LOCK.UPDATE,
+      lock: transaction.LOCK.NO_KEY_UPDATE,
       rejectOnEmpty: true,
     });
     authorize(user, "update", oauthClient);
 
-    await oauthClient.updateWithCtx(ctx, input);
+    await oauthClient.updateWithCtx(ctx, input, {
+      data: { name: input.name ?? oauthClient.name },
+    });
 
     ctx.body = {
       data: presentOAuthClient(oauthClient, { includeSecret: true }),
@@ -181,13 +183,15 @@ router.post(
 
     const oauthClient = await OAuthClient.findByPk(id, {
       transaction,
-      lock: transaction.LOCK.UPDATE,
+      lock: transaction.LOCK.NO_KEY_UPDATE,
       rejectOnEmpty: true,
     });
     authorize(user, "update", oauthClient);
 
     oauthClient.rotateClientSecret();
-    await oauthClient.saveWithCtx(ctx);
+    await oauthClient.saveWithCtx(ctx, undefined, {
+      data: { name: oauthClient.name, secretRotated: true },
+    });
 
     ctx.body = {
       data: presentOAuthClient(oauthClient, { includeSecret: true }),
@@ -208,12 +212,14 @@ router.post(
 
     const oauthClient = await OAuthClient.findByPk(id, {
       transaction,
-      lock: transaction.LOCK.UPDATE,
+      lock: transaction.LOCK.NO_KEY_UPDATE,
       rejectOnEmpty: true,
     });
     authorize(user, "delete", oauthClient);
 
-    await oauthClient.destroyWithCtx(ctx);
+    await oauthClient.destroyWithCtx(ctx, {
+      data: { name: oauthClient.name },
+    });
 
     ctx.body = {
       success: true,

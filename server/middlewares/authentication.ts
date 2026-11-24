@@ -22,7 +22,7 @@ import { sequelize } from "@server/storage/database";
 import type { AppContext } from "@server/types";
 import { AuthenticationType } from "@server/types";
 import { JWT_COOKIE_TTL_DAYS } from "@server/utils/authentication";
-import { getJWTPayload, getUserForJWT } from "@server/utils/jwt";
+import { getUserForJWT } from "@server/utils/jwt";
 import { LogThrottle } from "@server/utils/LogThrottle";
 import {
   EDGE_SECRET_HEADER,
@@ -50,6 +50,8 @@ type BaseAuthenticationOptions = {
   role?: UserRole;
   /** Type of authentication required to access the route. */
   type?: AuthenticationType | AuthenticationType[];
+  /** Transports the token may be received from, defaults to all. */
+  transports?: AuthTransport[];
 };
 
 type AuthenticationOptions =
@@ -204,10 +206,18 @@ function withExpiredSessionCookies(
  * Parses the authentication token from the request context.
  *
  * @param ctx The application context containing the request information.
+ * @param transports The transports to read the token from, defaults to all.
  * @returns An object containing the token and its transport method.
  */
-export function parseAuthentication(ctx: AppContext): AuthInput {
-  const authorizationHeader = ctx.request.get("authorization");
+export function parseAuthentication(
+  ctx: AppContext,
+  transports?: AuthTransport[]
+): AuthInput {
+  const isAllowed = (transport: AuthTransport) =>
+    !transports || transports.includes(transport);
+  const authorizationHeader = isAllowed("header")
+    ? ctx.request.get("authorization")
+    : undefined;
 
   if (authorizationHeader) {
     const parts = authorizationHeader.split(" ");
@@ -228,6 +238,7 @@ export function parseAuthentication(ctx: AppContext): AuthInput {
       );
     }
   } else if (
+    isAllowed("body") &&
     ctx.request.body &&
     typeof ctx.request.body === "object" &&
     "token" in ctx.request.body
@@ -236,12 +247,12 @@ export function parseAuthentication(ctx: AppContext): AuthInput {
       token: String(ctx.request.body.token),
       transport: "body",
     };
-  } else if (ctx.request.query?.token) {
+  } else if (isAllowed("query") && ctx.request.query?.token) {
     return {
       token: String(ctx.request.query.token),
       transport: "query",
     };
-  } else {
+  } else if (isAllowed("cookie")) {
     const accessToken = ctx.cookies.get("accessToken");
     if (accessToken) {
       return {
@@ -255,7 +266,7 @@ export function parseAuthentication(ctx: AppContext): AuthInput {
   // credentials — so an existing session cookie (or Bearer token) is always
   // preferred. This means once the JWT cookie has been issued the header path
   // is bypassed entirely, avoiding a DB round-trip on every request.
-  const authRequestEmail = trustedProxyEmail(ctx);
+  const authRequestEmail = isAllowed("proxy") ? trustedProxyEmail(ctx) : "";
   if (authRequestEmail) {
     return {
       token: `${FORWARDED_TOKEN_PREFIX}${authRequestEmail}`,
@@ -503,7 +514,7 @@ async function validateAuthentication(
   transport?: AuthTransport;
 }> {
   warnOnUntrustedIdentityHeaders(ctx);
-  const { token, transport } = parseAuthentication(ctx);
+  const { token, transport } = parseAuthentication(ctx, options.transports);
 
   if (!token) {
     throw AuthenticationError("Authentication required");
@@ -715,16 +726,11 @@ async function validateAuthentication(
     });
   } else {
     // Session tokens are long-lived, so keep them out of transports that end up
-    // in browser history, referrers, and request logs. Short-lived single-use
-    // tokens such as transfer are still accepted from anywhere.
+    // in browser history, referrers, and request logs.
     if (transport !== "cookie" && transport !== "header") {
-      const payload = getJWTPayload(token);
-
-      if (payload.type === "session") {
-        throw AuthenticationError(
-          "Session token must be passed in the cookie or Authorization header"
-        );
-      }
+      throw AuthenticationError(
+        "Session token must be passed in the cookie or Authorization header"
+      );
     }
 
     type = AuthenticationType.APP;

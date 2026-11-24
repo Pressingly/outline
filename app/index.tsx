@@ -22,7 +22,7 @@ import env from "~/env";
 import { initI18n } from "~/utils/i18n";
 import Desktop from "./components/DesktopEventHandler";
 import PageScroll from "./components/PageScroll";
-import Routes from "./routes";
+import Routes, { preloadShared } from "./routes";
 import Logger from "./utils/Logger";
 import { PluginManager } from "./utils/PluginManager";
 import history from "./utils/history";
@@ -33,7 +33,8 @@ import { ActionContextProvider } from "./hooks/useActionContext";
 // Load plugins as soon as possible
 void PluginManager.loadPlugins();
 
-initI18n(env.DEFAULT_LANGUAGE);
+// Start with the language of the stored user to prevent a second fetch.
+initI18n(stores.auth.user?.language ?? env.DEFAULT_LANGUAGE);
 
 // Register ahead of rendering so the capture-phase listeners run before any
 // React-mounted listener, such as kbar's Enter handler.
@@ -97,8 +98,16 @@ if (element) {
     </StrictMode>
   );
 
-  element.__reactRoot ??= createRoot(element);
-  element.__reactRoot.render(<App />);
+  // A lazy chunk that suspends the first render holds back the content for
+  // 300ms after it loads, so share pages wait for their chunks before render.
+  const ready = env.isShare
+    ? preloadShared().catch(() => undefined)
+    : Promise.resolve();
+
+  void ready.then(() => {
+    element.__reactRoot ??= createRoot(element);
+    element.__reactRoot.render(<App />);
+  });
 }
 
 window.addEventListener("load", async () => {

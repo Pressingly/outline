@@ -75,10 +75,12 @@ router.post(
           return;
         }
 
+        // The share page signs this document's attachments, so this adds no access.
         ctx.body = await presentUnfurl({
           type: UnfurlResourceType.Document,
           document,
           anchor: urlObj.hash,
+          signedUrls: true,
           url: `${share.canonicalUrl}/doc/${document.url.replace("/doc/", "")}${urlObj.hash}`,
         });
         return;
@@ -190,10 +192,19 @@ router.post(
       return;
     }
 
-    // External resources
+    // External resources are unfurled with workspace credentials
+    if (actor.isGuest) {
+      ctx.response.status = 204;
+      return;
+    }
+
     // Use getDataOrSet which handles distributed locking to prevent thundering herd
     // when multiple clients request the same URL simultaneously
-    const cacheKey = RedisPrefixHelper.getUnfurlKey(actor.teamId, url);
+    const cacheKey = RedisPrefixHelper.getUnfurlKey(
+      actor.teamId,
+      actor.id,
+      url
+    );
     const defaultCacheExpiry = 3600;
 
     const unfurlResult = await CacheHelper.getDataOrSet<

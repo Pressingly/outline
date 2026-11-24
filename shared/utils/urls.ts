@@ -1,4 +1,5 @@
 import { escapeRegExp } from "es-toolkit/compat";
+import isUUID from "validator/lib/isUUID";
 import env from "../env";
 import { isBrowser } from "./browser";
 import { parseDomain } from "./domains";
@@ -88,6 +89,41 @@ export function isCollectionUrl(url: string) {
     return isInternalUrl(url) && parsed.pathname.startsWith("/collection/");
   } catch (_err) {
     return false;
+  }
+}
+
+/**
+ * Converts a signed attachment url from this instance, which expires, to the
+ * stable attachment redirect url. The signature is not verified.
+ *
+ * @param url The url to convert.
+ * @returns The attachment redirect url, or undefined if the url is not a signed
+ * attachment url.
+ */
+export function signedUrlToAttachmentUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url, isBrowser ? window.location.href : env.URL);
+    const sig = parsed.searchParams.get("sig");
+    if (
+      !isInternalUrl(parsed.href) ||
+      parsed.pathname !== "/api/files.get" ||
+      !sig
+    ) {
+      return;
+    }
+
+    const payload = JSON.parse(
+      atob(sig.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))
+    );
+    if (payload?.type !== "attachment" || typeof payload.key !== "string") {
+      return;
+    }
+
+    // Attachment keys are in the format bucket/userId/id/name.
+    const id = payload.key.split("/")[2];
+    return isUUID(id) ? `/api/attachments.redirect?id=${id}` : undefined;
+  } catch (_err) {
+    return;
   }
 }
 
@@ -332,6 +368,11 @@ export function sanitizeImageSrc(src: string | null | undefined) {
   return sanitizeUrl(src);
 }
 
+const defaultPorts: Record<string, string> = {
+  "http:": "80",
+  "https:": "443",
+};
+
 /**
  * Returns a regex to match urls that begin with the given url's origin.
  *
@@ -345,7 +386,13 @@ export function urlRegex(url: string | null | undefined): RegExp | undefined {
 
   const urlObj = new URL(sanitizeUrl(url) as string);
 
-  return new RegExp(`^${escapeRegExp(`${urlObj.protocol}//${urlObj.host}`)}`);
+  const origin = escapeRegExp(`${urlObj.protocol}//${urlObj.host}`);
+
+  // URL.host omits a default port, but the matched url can still state it.
+  const defaultPort = urlObj.port ? undefined : defaultPorts[urlObj.protocol];
+  const port = defaultPort ? `(?::${defaultPort})?` : "";
+
+  return new RegExp(`^${origin}${port}(?=[/?#]|$)`);
 }
 
 /**

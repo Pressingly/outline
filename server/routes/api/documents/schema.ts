@@ -450,9 +450,6 @@ export const DocumentsUpdateSchema = BaseSchema.extend({
 
     /** @deprecated Version of the API to be used, remove in a few releases */
     apiVersion: z.number().optional(),
-
-    /** Whether the editing session is complete */
-    done: z.boolean().optional(),
   }),
 })
   .refine(
@@ -689,9 +686,7 @@ export type DocumentsRemoveUserReq = z.infer<typeof DocumentsRemoveUserSchema>;
 export const DocumentsAddGroupSchema = BaseSchema.extend({
   body: BaseIdSchema.extend({
     groupId: z.uuid(),
-    permission: z
-      .enum(DocumentPermission)
-      .prefault(DocumentPermission.ReadWrite),
+    permission: z.enum(DocumentPermission).optional(),
   }),
 });
 

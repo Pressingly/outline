@@ -4,6 +4,7 @@ import { AttachmentPreset } from "@shared/types";
 import { dataUrlToBlob } from "@shared/utils/files";
 import { client } from "./ApiClient";
 import Logger from "./Logger";
+import { NetworkError } from "./errors";
 
 type UploadOptions = {
   /** The user generated ID of the file */
@@ -74,22 +75,20 @@ export const uploadFile = async (
       }
     });
     xhr.addEventListener("error", () => {
-      const extra = {
-        status: xhr.status,
-        statusText: xhr.statusText,
-        contentType: file.type,
-        size: file.size,
-      };
-
+      // The request received no response, which is thrown as a network error.
       if (xhr.status === 0) {
-        Logger.warn("File upload failed before response", extra);
         return;
       }
 
       Logger.error(
         "File upload failed",
         new Error(`${xhr.status} ${xhr.statusText}`),
-        extra
+        {
+          status: xhr.status,
+          statusText: xhr.statusText,
+          contentType: file.type,
+          size: file.size,
+        }
       );
     });
     xhr.addEventListener("loadend", () => {
@@ -134,7 +133,9 @@ export const uploadFile = async (
   });
 
   if (!success) {
-    throw new Error("Upload failed");
+    throw xhr.status === 0
+      ? new NetworkError("Upload failed")
+      : new Error("Upload failed");
   }
 
   return attachment;
@@ -145,7 +146,8 @@ export { dataUrlToBlob };
 /**
  * Converts a list of mime types and file extensions to the accept map used by
  * react-dropzone. The map is flattened into a single accept attribute, so the
- * extensions are grouped under the first mime type.
+ * extensions are grouped under the first mime type, or a placeholder if there
+ * is none.
  *
  * @param types the mime types and file extensions, such as "image/png" or ".png".
  * @returns the accept map.
@@ -154,6 +156,10 @@ export const toDropzoneAccept = (types: readonly string[]): Accept => {
   const mimeTypes = types.filter((type) => !type.startsWith("."));
   const extensions = types.filter((type) => type.startsWith("."));
 
+  if (mimeTypes.length === 0 && extensions.length > 0) {
+    return { [extensionOnlyMimeType]: extensions };
+  }
+
   return Object.fromEntries(
     mimeTypes.map((mimeType, index) => [
       mimeType,
@@ -161,6 +167,9 @@ export const toDropzoneAccept = (types: readonly string[]): Accept => {
     ])
   );
 };
+
+/** A key for extensions with no mime type, no file reports this type. */
+const extensionOnlyMimeType = "application/x-outline-extension-only";
 
 /**
  * Header names the browser controls itself - it silently ignores an attempt to

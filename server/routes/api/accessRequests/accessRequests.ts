@@ -99,7 +99,7 @@ router.post(
     const accessRequest = await AccessRequest.findByPk(id, {
       rejectOnEmpty: true,
       transaction,
-      lock: { level: transaction.LOCK.UPDATE, of: AccessRequest },
+      lock: { level: transaction.LOCK.NO_KEY_UPDATE, of: AccessRequest },
     });
 
     const document = await Document.findByPk(accessRequest.documentId, {
@@ -114,14 +114,10 @@ router.post(
       throw InvalidRequestError("Access request has already been responded to");
     }
 
-    const membership = await UserMembership.findOne({
-      where: {
-        userId: accessRequest.userId,
-        documentId: accessRequest.documentId,
-      },
-      lock: transaction.LOCK.UPDATE,
-      transaction,
-    });
+    const membership = await UserMembership.findOneForUpdate(
+      { userId: accessRequest.userId, documentId: accessRequest.documentId },
+      { transaction }
+    );
 
     if (!membership) {
       await UserMembership.createWithCtx(ctx, {
@@ -155,7 +151,7 @@ router.post(
     const accessRequest = await AccessRequest.findByPk(id, {
       rejectOnEmpty: true,
       transaction,
-      lock: { level: transaction.LOCK.UPDATE, of: AccessRequest },
+      lock: { level: transaction.LOCK.NO_KEY_UPDATE, of: AccessRequest },
     });
 
     const document = await Document.findByPk(accessRequest.documentId, {

@@ -9,7 +9,7 @@ import {
   AuthenticationProviderDisabledError,
 } from "@server/errors";
 import { traceFunction } from "@server/logging/tracing";
-import type { User } from "@server/models";
+import type { User, UserAuthentication } from "@server/models";
 import {
   AuthenticationProvider,
   Collection,
@@ -84,6 +84,8 @@ export type AccountProvisionerResult = {
   team: Team;
   isNewTeam: boolean;
   isNewUser: boolean;
+  /** The stored authentication for this sign-in, if one was saved. */
+  authentication?: UserAuthentication;
 };
 
 async function accountProvisioner(
@@ -135,7 +137,10 @@ async function accountProvisioner(
   } catch (err) {
     // The account could not be provisioned for the provided teamId
     // check to see if we can try authentication using email matching only
-    if (errToId(err) === "invalid_authentication") {
+    if (
+      errToId(err) === "invalid_authentication" &&
+      AuthenticationHelper.allowsEmailMatch(authenticationProviderParams.name)
+    ) {
       const authProvider = await AuthenticationProvider.findOne({
         where: {
           name: authenticationProviderParams.name,
@@ -198,13 +203,20 @@ async function accountProvisioner(
             : undefined,
         },
   });
-  const { isNewUser, user } = result;
+  const { isNewUser, isInvite, user } = result;
 
-  if (isNewUser && user.isInvited) {
-    await Event.createFromContext(ctx, {
-      name: "users.invite_accepted",
-      userId: user.id,
-    });
+  if (isInvite) {
+    // The browser may have a session for another user, which must not be used.
+    await Event.create(
+      {
+        name: "users.invite_accepted",
+        userId: user.id,
+        actorId: user.id,
+        teamId: user.teamId,
+        ip: ctx.context.ip,
+      },
+      { transaction: ctx.state.transaction }
+    );
   }
 
   if (isNewUser || isNewTeam) {
@@ -244,6 +256,7 @@ async function accountProvisioner(
     team,
     isNewUser,
     isNewTeam,
+    authentication: result.authentication ?? undefined,
   };
 }
 

@@ -2,9 +2,11 @@ import type { Location, LocationDescriptor } from "history";
 import { observer } from "mobx-react";
 import { PlusIcon } from "outline-icons";
 import * as React from "react";
+import { flushSync } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { mergeRefs } from "react-merge-refs";
 import type { match } from "react-router";
+import { isTouchDevice } from "@shared/utils/browser";
 import { CollectionValidation, DocumentValidation } from "@shared/validations";
 import type Collection from "~/models/Collection";
 import EditableTitle, { type RefHandle } from "~/components/EditableTitle";
@@ -148,7 +150,9 @@ function CollectionRow({
       try {
         newChildTitleRef.current?.setIsEditing(false);
         await onCreateChild(value);
-        closeAddingNewChild();
+
+        // Remove the input in the same paint as the new tree item.
+        flushSync(closeAddingNewChild);
       } catch (_err) {
         newChildTitleRef.current?.setIsEditing(true);
       }
@@ -182,7 +186,13 @@ function CollectionRow({
     <CollectionIcon collection={collection} expanded={expanded} />
   );
 
-  const hasMenuContent = Boolean(menu) || canCreateChild;
+  // Touch devices cannot hover to reveal the actions, so the new doc button
+  // stays on screen in place of the other actions.
+  const isTouch = isTouchDevice();
+  const showCreateChild = isTouch && !!canCreateChild && !isEditing;
+  const rowMenu = isTouch ? undefined : menu;
+
+  const hasMenuContent = Boolean(rowMenu) || canCreateChild;
   const menuVisible = hasMenuContent && !isEditing;
   const menuElement = menuVisible ? (
     <Fade>
@@ -196,7 +206,7 @@ function CollectionRow({
           </NudeButton>
         </Tooltip>
       )}
-      {menu}
+      {rowMenu}
     </Fade>
   ) : undefined;
 
@@ -238,7 +248,7 @@ function CollectionRow({
       label={labelElement}
       ellipsis={!isEditing}
       exact={false}
-      $showActions={menuOpen}
+      $showActions={menuOpen || showCreateChild}
       menu={menuElement}
     />
   );

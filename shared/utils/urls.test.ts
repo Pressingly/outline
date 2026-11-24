@@ -1,4 +1,5 @@
 import env from "../env";
+import { isBrowser } from "./browser";
 import * as urlsUtils from "./urls";
 import { urlRegex } from "./urls";
 
@@ -160,6 +161,70 @@ describe("isInternalUrl", () => {
   });
 });
 
+describe("signedUrlToAttachmentUrl", () => {
+  const id = "4d3e6f2a-8b1c-4e5d-9f0a-1b2c3d4e5f60";
+
+  const sign = (payload: object) =>
+    [
+      btoa(JSON.stringify({ alg: "HS256", typ: "JWT" })),
+      btoa(JSON.stringify(payload))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, ""),
+      "signature",
+    ].join(".");
+
+  it("should return the redirect url for a signed attachment url", () => {
+    const origin = isBrowser ? window.location.origin : env.URL;
+    const sig = sign({
+      key: `uploads/${id}/${id}/image ünïcode.png`,
+      type: "attachment",
+    });
+
+    expect(
+      urlsUtils.signedUrlToAttachmentUrl(`${origin}/api/files.get?sig=${sig}`)
+    ).toEqual(`/api/attachments.redirect?id=${id}`);
+    expect(
+      urlsUtils.signedUrlToAttachmentUrl(`/api/files.get?sig=${sig}`)
+    ).toEqual(`/api/attachments.redirect?id=${id}`);
+  });
+
+  it("should return undefined for an external url", () => {
+    const sig = sign({
+      key: `uploads/${id}/${id}/image.png`,
+      type: "attachment",
+    });
+
+    expect(
+      urlsUtils.signedUrlToAttachmentUrl(
+        `https://other.example.com/api/files.get?sig=${sig}`
+      )
+    ).toBeUndefined();
+    expect(
+      urlsUtils.signedUrlToAttachmentUrl(
+        `//other.example.com/api/files.get?sig=${sig}`
+      )
+    ).toBeUndefined();
+  });
+
+  it("should return undefined for other urls", () => {
+    expect(
+      urlsUtils.signedUrlToAttachmentUrl(`/api/attachments.redirect?id=${id}`)
+    ).toBeUndefined();
+    expect(
+      urlsUtils.signedUrlToAttachmentUrl("/api/files.get?key=public/a/b/c.png")
+    ).toBeUndefined();
+    expect(
+      urlsUtils.signedUrlToAttachmentUrl("/api/files.get?sig=invalid")
+    ).toBeUndefined();
+    expect(
+      urlsUtils.signedUrlToAttachmentUrl(
+        `/api/files.get?sig=${sign({ key: "uploads/a/b/c.png", type: "attachment" })}`
+      )
+    ).toBeUndefined();
+  });
+});
+
 describe("addMissingUrlPort", () => {
   const url = env.URL;
 
@@ -254,11 +319,6 @@ describe("sanitizeUrl", () => {
     });
     it("should return the url as it's if starting with #", () => {
       expect(urlsUtils.sanitizeUrl("#home")).toEqual("#home");
-    });
-    it("should return the url as it's if it's mailto:", () => {
-      expect(urlsUtils.sanitizeUrl("mailto:outline@getoutline.com")).toEqual(
-        "mailto:outline@getoutline.com"
-      );
     });
     it("should return the url as it's if it's mailto:", () => {
       expect(urlsUtils.sanitizeUrl("mailto:outline@getoutline.com")).toEqual(
@@ -427,7 +487,9 @@ describe("#urlRegex", () => {
 
   it("should return corresponding regex otherwise", () => {
     const regex = urlRegex("https://docs.google.com");
-    expect(regex?.source).toBe(/^https:\/\/docs\.google\.com/.source);
+    expect(regex?.source).toBe(
+      /^https:\/\/docs\.google\.com(?::443)?(?=[/?#]|$)/.source
+    );
     expect(regex?.test("https://docs.google.com")).toBe(true);
     expect(regex?.test("https://docs.google.com/")).toBe(true);
     expect(regex?.test("https://docs.google.com/d/123")).toBe(true);
@@ -438,6 +500,41 @@ describe("#urlRegex", () => {
     expect(regex?.test("javascript:alert(1)//https://docs.google.com")).toBe(
       false
     );
+  });
+
+  it("should only match the exact origin", () => {
+    const regex = urlRegex("https://docs.google.com");
+    expect(regex?.test("https://docs.google.com?a=1")).toBe(true);
+    expect(regex?.test("https://docs.google.com#a")).toBe(true);
+    expect(regex?.test("https://docs.google.com.evil.net/x")).toBe(false);
+    expect(regex?.test("https://docs.google.com@evil.net/x")).toBe(false);
+    expect(regex?.test("https://docs.google.com\\@evil.net/x")).toBe(false);
+    expect(regex?.test("https://docs.google.com:8080/x")).toBe(false);
+  });
+
+  it("should match a url that states the default port", () => {
+    for (const base of [
+      "https://docs.google.com",
+      "https://docs.google.com:443",
+    ]) {
+      const regex = urlRegex(base);
+      expect(regex?.test("https://docs.google.com/x")).toBe(true);
+      expect(regex?.test("https://docs.google.com:443")).toBe(true);
+      expect(regex?.test("https://docs.google.com:443/x")).toBe(true);
+      expect(regex?.test("https://docs.google.com:4430/x")).toBe(false);
+      expect(regex?.test("https://docs.google.com:80/x")).toBe(false);
+    }
+
+    const http = urlRegex("http://docs.google.com");
+    expect(http?.test("http://docs.google.com:80/x")).toBe(true);
+    expect(http?.test("http://docs.google.com:443/x")).toBe(false);
+  });
+
+  it("should only match a non-default port exactly", () => {
+    const regex = urlRegex("https://docs.google.com:8443");
+    expect(regex?.test("https://docs.google.com:8443/x")).toBe(true);
+    expect(regex?.test("https://docs.google.com/x")).toBe(false);
+    expect(regex?.test("https://docs.google.com:443/x")).toBe(false);
   });
 });
 

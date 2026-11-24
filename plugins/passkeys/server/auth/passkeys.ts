@@ -10,7 +10,9 @@ import Router from "@koa/router";
 import { randomBytes } from "node:crypto";
 import { toError } from "@shared/utils/error";
 import { User, UserPasskey, Team } from "@server/models";
+import { apiContext } from "@server/middlewares/apiContext";
 import auth from "@server/middlewares/authentication";
+import { transaction } from "@server/middlewares/transaction";
 import validate from "@server/middlewares/validate";
 import env from "@server/env";
 import { AuthorizationError, ValidationError } from "@server/errors";
@@ -146,13 +148,17 @@ router.post(
   "passkeys.verifyRegistration",
   auth({ type: AuthenticationType.APP }),
   validate(T.PasskeysVerifyRegistrationSchema),
+  // Auth routes have no API context by default, without it the resulting event
+  // has no actor or team and cannot appear in the audit log.
+  apiContext(),
+  transaction(),
   async (ctx: APIContext<T.PasskeysVerifyRegistrationReq>) => {
     const { user } = ctx.state.auth;
     const body = ctx.input.body;
     authorize(user, "createUserPasskey", user.team);
 
-    // Retrieve challenge from Redis
-    const expectedChallenge = await Redis.defaultClient.get(
+    // Consume the challenge atomically so it can only be used once
+    const expectedChallenge = await Redis.defaultClient.getdel(
       getRegistrationChallengeKey(user.id)
     );
 
@@ -232,8 +238,6 @@ router.post(
         });
       }
 
-      // Delete challenge from Redis
-      await Redis.defaultClient.del(getRegistrationChallengeKey(user.id));
       ctx.body = { data: { verified: true } };
     } else {
       throw ValidationError("Verification failed");
@@ -295,8 +299,8 @@ router.post(
     const body = ctx.input.body;
     const { challengeId, client = Client.Web } = body;
 
-    // Retrieve challenge from Redis
-    const expectedChallenge = await Redis.defaultClient.get(
+    // Consume the challenge atomically so it can only be used once
+    const expectedChallenge = await Redis.defaultClient.getdel(
       getAuthenticationChallengeKey(challengeId)
     );
 
@@ -364,9 +368,6 @@ router.post(
       passkey.counter = authenticationInfo.newCounter;
       passkey.lastActiveAt = new Date();
       await passkey.save({ silent: true });
-
-      // Delete challenge from Redis
-      await Redis.defaultClient.del(getAuthenticationChallengeKey(challengeId));
 
       // Use the signIn utility which handles all sign-in logic
       await signIn(ctx, "passkeys", {

@@ -4995,6 +4995,91 @@ describe("#documents.deleted", () => {
     expect(monthBody.data.length).toEqual(1);
   });
 
+  it("should not return deleted drafts created by other collection members", async () => {
+    const user = await buildUser();
+    const other = await buildUser({ teamId: user.teamId });
+    const collection = await buildCollection({ teamId: user.teamId });
+    const ownDraft = await buildDraftDocument({
+      userId: user.id,
+      teamId: user.teamId,
+      collectionId: collection.id,
+    });
+    const otherDraft = await buildDraftDocument({
+      userId: other.id,
+      teamId: user.teamId,
+      collectionId: collection.id,
+    });
+    const otherDocument = await buildDocument({
+      userId: other.id,
+      teamId: user.teamId,
+      collectionId: collection.id,
+    });
+    await withAPIContext(user, (ctx) => ownDraft.destroyWithCtx(ctx));
+    await withAPIContext(other, (ctx) => otherDraft.destroyWithCtx(ctx));
+    await withAPIContext(other, (ctx) => otherDocument.destroyWithCtx(ctx));
+
+    const res = await server.post("/api/documents.deleted", user);
+    const body = await res.json();
+    const ids = body.data.map((d: { id: string }) => d.id);
+    expect(res.status).toEqual(200);
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain(ownDraft.id);
+    expect(ids).toContain(otherDocument.id);
+    expect(ids).not.toContain(otherDraft.id);
+  });
+
+  it("should return deleted drafts the user has a direct membership on", async () => {
+    const user = await buildUser();
+    const other = await buildUser({ teamId: user.teamId });
+    const collection = await buildCollection({ teamId: user.teamId });
+    const sharedDraft = await buildDraftDocument({
+      userId: other.id,
+      teamId: user.teamId,
+      collectionId: collection.id,
+    });
+    await UserMembership.create({
+      createdById: other.id,
+      documentId: sharedDraft.id,
+      userId: user.id,
+      permission: DocumentPermission.ReadWrite,
+    });
+    await withAPIContext(other, (ctx) => sharedDraft.destroyWithCtx(ctx));
+
+    const res = await server.post("/api/documents.deleted", user);
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.length).toEqual(1);
+    expect(body.data[0].id).toEqual(sharedDraft.id);
+  });
+
+  it("should return deleted drafts shared with a group of the user", async () => {
+    const user = await buildUser();
+    const other = await buildUser({ teamId: user.teamId });
+    const group = await buildGroup({ teamId: user.teamId });
+    await group.$add("user", user, {
+      through: { createdById: other.id },
+    });
+    const collection = await buildCollection({ teamId: user.teamId });
+    const sharedDraft = await buildDraftDocument({
+      userId: other.id,
+      teamId: user.teamId,
+      collectionId: collection.id,
+    });
+    await GroupMembership.create({
+      groupId: group.id,
+      documentId: sharedDraft.id,
+      permission: DocumentPermission.ReadWrite,
+      createdById: other.id,
+    });
+    await withAPIContext(other, (ctx) => sharedDraft.destroyWithCtx(ctx));
+
+    const res = await server.post("/api/documents.deleted", user);
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.length).toEqual(1);
+    expect(body.data[0].id).toEqual(sharedDraft.id);
+  });
+
   it("should require member", async () => {
     const viewer = await buildViewer();
     const res = await server.post("/api/documents.deleted", viewer);
@@ -5040,6 +5125,48 @@ describe("#documents.viewed", () => {
     expect(body.data.length).toEqual(1);
     expect(body.data[0].id).toEqual(document.id);
     expect(body.policies[0].abilities.update).toBeTruthy();
+  });
+
+  it("should paginate in view order and skip deleted documents", async () => {
+    const user = await buildUser();
+    const documents = await Promise.all(
+      [0, 1, 2, 3].map(() =>
+        buildDocument({
+          userId: user.id,
+          teamId: user.teamId,
+        })
+      )
+    );
+    for (const [index, document] of documents.entries()) {
+      await View.create(
+        {
+          documentId: document.id,
+          userId: user.id,
+          updatedAt: new Date(Date.now() - index * 1000),
+        },
+        { silent: true }
+      );
+    }
+    await documents[1].destroy();
+
+    const res = await server.post("/api/documents.viewed", user, {
+      body: { limit: 2 },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.map((doc: { id: string }) => doc.id)).toEqual([
+      documents[0].id,
+      documents[2].id,
+    ]);
+
+    const nextRes = await server.post("/api/documents.viewed", user, {
+      body: { limit: 2, offset: 2 },
+    });
+    const nextBody = await nextRes.json();
+    expect(nextRes.status).toEqual(200);
+    expect(nextBody.data.map((doc: { id: string }) => doc.id)).toEqual([
+      documents[3].id,
+    ]);
   });
 
   it("should not return recently viewed but deleted documents", async () => {
@@ -8882,6 +9009,35 @@ describe("#documents.remove_user", () => {
 });
 
 describe("#documents.add_group", () => {
+  it("should preserve existing permission when permission is omitted", async () => {
+    const user = await buildUser();
+    const collection = await buildCollection({
+      teamId: user.teamId,
+      createdById: user.id,
+      permission: null,
+    });
+    const document = await buildDocument({
+      collectionId: collection.id,
+      createdById: user.id,
+      teamId: user.teamId,
+    });
+    const group = await buildGroup({ teamId: user.teamId });
+    const membership = await GroupMembership.create({
+      createdById: user.id,
+      documentId: document.id,
+      groupId: group.id,
+      permission: DocumentPermission.Admin,
+    });
+
+    const res = await server.post("/api/documents.add_group", user, {
+      body: { id: document.id, groupId: group.id },
+    });
+
+    expect(res.status).toEqual(200);
+    await membership.reload();
+    expect(membership.permission).toEqual(DocumentPermission.Admin);
+  });
+
   it("should require id", async () => {
     const user = await buildUser();
     const res = await server.post("/api/documents.add_group", user);
