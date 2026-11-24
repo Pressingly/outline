@@ -20,11 +20,13 @@ import { sequelize } from "@server/storage/database";
 import { server } from "@server/test/msw";
 import { buildMockContext } from "@server/test/support";
 import { AuthenticationType } from "@server/types";
+import { MpassTestIssuer } from "@server/test/mpassTokens";
 import { JWT_COOKIE_TTL_DAYS } from "@server/utils/authentication";
 import { EDGE_SECRET_HEADER } from "@server/utils/mpassEdgeTrust";
 import auth, { FORWARDAUTH_SERVICE } from "./authentication";
 
 const EDGE_SECRET = "e".repeat(64);
+const mpass = new MpassTestIssuer();
 
 interface CtxOverrides {
   originalUrl?: string;
@@ -492,11 +494,13 @@ describe("Authentication middleware", () => {
     beforeEach(() => {
       env.AUTH_TYPE = AUTH_TYPE_SSO;
       env.MPASS_EDGE_SECRET = EDGE_SECRET;
+      mpass.install();
     });
 
     afterEach(() => {
       env.AUTH_TYPE = undefined;
       env.MPASS_EDGE_SECRET = "";
+      mpass.uninstall();
     });
 
     it("should authenticate an existing user via X-Auth-Request-Email", async () => {
@@ -515,6 +519,10 @@ return EDGE_SECRET;
 }
 if (header === "x-auth-request-email") {
                 return user.email!;
+              }
+              const proof = mpass.proofHeaders(user.email!)[header];
+              if (proof) {
+                return proof;
               }
               return "";
             }),
@@ -551,6 +559,10 @@ return EDGE_SECRET;
 }
 if (header === "x-auth-request-email") {
                 return user.email!;
+              }
+              const proof = mpass.proofHeaders(user.email!)[header];
+              if (proof) {
+                return proof;
               }
               return "";
             }),
@@ -606,6 +618,7 @@ if (header === "x-auth-request-email") {
 
         const { state, cookieNames } = await authenticateWithHeaders({
           "x-auth-request-email": user.email!,
+          ...mpass.proofHeaders(user.email!),
           [EDGE_SECRET_HEADER]: EDGE_SECRET,
         });
 
@@ -643,6 +656,7 @@ if (header === "x-auth-request-email") {
         const state = {} as DefaultState;
         const headers: Record<string, string> = {
           "x-auth-request-email": email,
+          ...mpass.proofHeaders(email),
           [EDGE_SECRET_HEADER]: EDGE_SECRET,
         };
         const run = auth({ transports })(
@@ -701,6 +715,10 @@ return EDGE_SECRET;
 if (header === "x-auth-request-email") {
                 return newEmail;
               }
+              const proof = mpass.proofHeaders(newEmail)[header];
+              if (proof) {
+                return proof;
+              }
               return "";
             }),
           },
@@ -743,6 +761,10 @@ return EDGE_SECRET;
 if (header === "x-auth-request-email") {
                   return localPart;
                 }
+                const proof = mpass.proofHeaders(localPart)[header];
+                if (proof) {
+                  return proof;
+                }
                 return "";
               }),
             },
@@ -761,14 +783,14 @@ if (header === "x-auth-request-email") {
       }
     });
 
-    it("should reject a forwarded email with no local part", async () => {
+    it("should refuse a forwarded email with no local part", async () => {
       await buildTeam();
       const state = {} as DefaultState;
       const authMiddleware = auth();
 
       // "@example.com" normalises to "@<DEFAULT_EMAIL_DOMAIN>" with an empty
-      // local part. User.name enforces min length 1, so we reject up front
-      // rather than letting provisioning fail with an opaque validation error.
+      // local part, a synthetic address no mPass id can own, so the identity
+      // binding refuses it before provisioning is attempted.
       await expect(
         authMiddleware(
           {
@@ -781,6 +803,12 @@ return EDGE_SECRET;
 if (header === "x-auth-request-email") {
                   return "@example.com";
                 }
+                const proof = mpass.proofHeaders("@example.com", "mpass-1")[
+                  header
+                ];
+                if (proof) {
+                  return proof;
+                }
                 return "";
               }),
             },
@@ -792,7 +820,7 @@ if (header === "x-auth-request-email") {
           },
           vi.fn()
         )
-      ).rejects.toThrow("Invalid forwarded email: missing local part");
+      ).rejects.toThrow("Access denied");
     });
 
     it("should not match existing users via SQL LIKE wildcard characters", async () => {
@@ -821,6 +849,10 @@ return EDGE_SECRET;
 }
 if (header === "x-auth-request-email") {
                 return wildcardEmail;
+              }
+              const proof = mpass.proofHeaders(wildcardEmail)[header];
+              if (proof) {
+                return proof;
               }
               return "";
             }),
@@ -869,6 +901,10 @@ return EDGE_SECRET;
 }
 if (header === "x-auth-request-email") {
                   return newEmail;
+                }
+                const proof = mpass.proofHeaders(newEmail)[header];
+                if (proof) {
+                  return proof;
                 }
                 return "";
               }),
@@ -937,6 +973,10 @@ return EDGE_SECRET;
 if (header === "x-auth-request-email") {
                   return bob.email!;
                 }
+                const proof = mpass.proofHeaders(bob.email!)[header];
+                if (proof) {
+                  return proof;
+                }
                 return "";
               }),
             },
@@ -991,6 +1031,10 @@ return EDGE_SECRET;
 if (header === "x-auth-request-email") {
                 return user.email!;
               }
+              const proof = mpass.proofHeaders(user.email!)[header];
+              if (proof) {
+                return proof;
+              }
               return "";
             }),
           },
@@ -1040,6 +1084,10 @@ return EDGE_SECRET;
 }
 if (header === "x-auth-request-email") {
                 return variantHeader;
+              }
+              const proof = mpass.proofHeaders(variantHeader)[header];
+              if (proof) {
+                return proof;
               }
               return "";
             }),
@@ -1208,6 +1256,10 @@ return EDGE_SECRET;
 }
 if (header === "x-auth-request-email") {
                   return "attacker@example.com";
+                }
+                const proof = mpass.proofHeaders("attacker@example.com")[header];
+                if (proof) {
+                  return proof;
                 }
                 return "";
               }),
@@ -1440,11 +1492,13 @@ describe("Authentication middleware - mPass edge trust", () => {
   beforeEach(() => {
     env.AUTH_TYPE = AUTH_TYPE_SSO;
     env.MPASS_EDGE_SECRET = EDGE_SECRET;
+    mpass.install();
   });
 
   afterEach(() => {
     env.AUTH_TYPE = undefined;
     env.MPASS_EDGE_SECRET = "";
+    mpass.uninstall();
     vi.restoreAllMocks();
   });
 
@@ -1455,6 +1509,7 @@ describe("Authentication middleware - mPass edge trust", () => {
       const { state, error } = await authenticate({
         headers: {
           "x-auth-request-email": user.email!,
+          ...mpass.proofHeaders(user.email!),
           [EDGE_SECRET_HEADER]: EDGE_SECRET,
         },
       });
@@ -1615,10 +1670,264 @@ describe("Authentication middleware - mPass edge trust", () => {
     });
   });
 
+  describe("identity binding", () => {
+    const mpassId = () => `${Date.now()}${randomString(6).toLowerCase()}`;
+
+    async function proxyLogin(headers: Record<string, string>) {
+      return authenticate({
+        headers: { [EDGE_SECRET_HEADER]: EDGE_SECRET, ...headers },
+      });
+    }
+
+    function expectRefused(
+      result: { error: unknown; state: DefaultState },
+      warn: ReturnType<typeof vi.spyOn>,
+      reason: string
+    ) {
+      expect(result.error).toHaveProperty("status", 401);
+      expect(result.state.auth).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        "mPass proxy login refused",
+        expect.objectContaining({ reason })
+      );
+    }
+
+    describe("accepts each caller shape", () => {
+      it("browser SSO: the Cognito access token with the overlay email", async () => {
+        const id = mpassId();
+        const user = await buildUser({ email: uniqueEmail() });
+
+        const { state, error } = await proxyLogin({
+          "x-auth-request-email": user.email!,
+          "x-auth-request-user": user.email!,
+          "x-auth-request-preferred-username": id,
+          "x-auth-request-access-token": mpass.accessToken(id),
+        });
+
+        expect(error).toBeUndefined();
+        expect(state.auth.user.id).toEqual(user.id);
+      });
+
+      it("Bearer leg: the mpass-auth-proxy id token, email compared case-insensitively", async () => {
+        const id = mpassId();
+        const user = await buildUser({ email: uniqueEmail() });
+
+        const { state, error } = await proxyLogin({
+          "x-auth-request-email": user.email!.toUpperCase(),
+          "x-auth-request-preferred-username": id,
+          "x-auth-request-access-token": mpass.idToken(id, user.email!),
+        });
+
+        expect(error).toBeUndefined();
+        expect(state.auth.user.id).toEqual(user.id);
+      });
+
+      it("access-agent mint: id-token email, cognito:username and the access token", async () => {
+        const id = mpassId();
+        const user = await buildUser({ email: uniqueEmail() });
+
+        const { state, error } = await proxyLogin({
+          "x-auth-request-email": user.email!,
+          "x-auth-request-preferred-username": id,
+          "x-auth-request-access-token": mpass.accessToken(id, {
+            sub: "sub-1",
+          }),
+        });
+
+        expect(error).toBeUndefined();
+        expect(state.auth.user.id).toEqual(user.id);
+      });
+
+      it.each([
+        ["a real email", () => uniqueEmail()],
+        ["no email, only the bare mPass id", (id: string) => id],
+      ])(
+        "outline-mcp mint with the preferred username and %s",
+        async (_label, emailFor) => {
+          const id = mpassId();
+
+          const { state, error } = await proxyLogin({
+            "x-auth-request-email": emailFor(id),
+            "x-auth-request-preferred-username": id,
+            "x-auth-request-access-token": mpass.accessToken(id),
+          });
+
+          expect(error).toBeUndefined();
+          expect(state.auth.service).toEqual(FORWARDAUTH_SERVICE);
+        }
+      );
+
+      it("capture off: the mPass id in X-Auth-Request-User alone", async () => {
+        const id = mpassId();
+
+        const { state, error } = await proxyLogin({
+          "x-auth-request-email": id,
+          "x-auth-request-user": id,
+          "x-auth-request-access-token": mpass.accessToken(id),
+        });
+
+        expect(error).toBeUndefined();
+        expect(state.auth.user.email).toEqual(`${id}@askii.ai`);
+      });
+
+      it("both username headers when they agree", async () => {
+        const id = mpassId();
+
+        const { error } = await proxyLogin({
+          "x-auth-request-email": `${id}@askii.ai`,
+          "x-auth-request-user": id,
+          "x-auth-request-preferred-username": id,
+          "x-auth-request-access-token": mpass.accessToken(id),
+        });
+
+        expect(error).toBeUndefined();
+      });
+    });
+
+    describe("refuses", () => {
+      it("a username that is not the token's, and provisions nobody", async () => {
+        const warn = vi.spyOn(Logger, "warn");
+        const email = uniqueEmail();
+
+        const result = await proxyLogin({
+          "x-auth-request-email": email,
+          "x-auth-request-preferred-username": "victim-id",
+          "x-auth-request-access-token": mpass.accessToken("attacker-id"),
+        });
+
+        expectRefused(result, warn, "username_mismatch");
+        expect(await User.count({ where: { email } })).toBe(0);
+      });
+
+      it("an id token whose email is not the forwarded one", async () => {
+        const warn = vi.spyOn(Logger, "warn");
+        const victim = await buildAdmin({ email: uniqueEmail() });
+        const id = mpassId();
+
+        const result = await proxyLogin({
+          "x-auth-request-email": victim.email!,
+          "x-auth-request-preferred-username": id,
+          "x-auth-request-access-token": mpass.idToken(id, uniqueEmail()),
+        });
+
+        expectRefused(result, warn, "email_mismatch");
+      });
+
+      it.each([
+        ["no username header", {}],
+        ["an X-Auth-Request-User that is an email", { user: "a@example.com" }],
+      ])("a request with %s", async (_label, { user }: { user?: string }) => {
+        const warn = vi.spyOn(Logger, "warn");
+        const id = mpassId();
+        const headers: Record<string, string> = {
+          "x-auth-request-email": uniqueEmail(),
+          "x-auth-request-access-token": mpass.accessToken(id),
+        };
+        if (user) {
+          headers["x-auth-request-user"] = user;
+        }
+
+        expectRefused(await proxyLogin(headers), warn, "missing_username");
+      });
+
+      it("username headers that disagree", async () => {
+        const warn = vi.spyOn(Logger, "warn");
+        const id = mpassId();
+
+        const result = await proxyLogin({
+          "x-auth-request-email": uniqueEmail(),
+          "x-auth-request-user": "someone-else",
+          "x-auth-request-preferred-username": id,
+          "x-auth-request-access-token": mpass.accessToken(id),
+        });
+
+        expectRefused(result, warn, "username_headers_disagree");
+      });
+
+      it("a synthetic email that names another mPass id", async () => {
+        const warn = vi.spyOn(Logger, "warn");
+        const victim = await buildAdmin({ email: `victim${mpassId()}@askii.ai` });
+        const id = mpassId();
+
+        const result = await proxyLogin({
+          "x-auth-request-email": victim.email!,
+          "x-auth-request-preferred-username": id,
+          "x-auth-request-access-token": mpass.accessToken(id),
+        });
+
+        expectRefused(result, warn, "synthetic_mismatch");
+      });
+
+      it("a token that names no username", async () => {
+        const warn = vi.spyOn(Logger, "warn");
+
+        const result = await proxyLogin({
+          "x-auth-request-email": uniqueEmail(),
+          "x-auth-request-preferred-username": "any-id",
+          "x-auth-request-access-token": mpass.accessToken("", {
+            username: undefined,
+          }),
+        });
+
+        expectRefused(result, warn, "token_without_username");
+      });
+
+      it("a token signed by an issuer Outline does not trust", async () => {
+        const warn = vi.spyOn(Logger, "warn");
+        const id = mpassId();
+        const untrusted = new MpassTestIssuer();
+        untrusted.issuer = "https://evil.example.test/pool";
+
+        const result = await proxyLogin({
+          "x-auth-request-email": uniqueEmail(),
+          "x-auth-request-preferred-username": id,
+          "x-auth-request-access-token": untrusted.accessToken(id),
+        });
+
+        expectRefused(result, warn, "untrusted_issuer");
+      });
+
+      it("logs the mPass id but never the email", async () => {
+        const warn = vi.spyOn(Logger, "warn");
+        const email = uniqueEmail();
+
+        await proxyLogin({
+          "x-auth-request-email": email,
+          "x-auth-request-user": email,
+          "x-auth-request-preferred-username": "claimed-id",
+          "x-auth-request-access-token": mpass.accessToken("token-id"),
+        });
+
+        expect(warn).toHaveBeenCalledWith("mPass proxy login refused", {
+          reason: "username_mismatch",
+          mpassId: "claimed-id",
+          path: "/api/auth.info",
+        });
+        expect(JSON.stringify(warn.mock.calls)).not.toContain(email);
+      });
+    });
+
+    it("leaves an established cookie session to the stale-session check", async () => {
+      const user = await buildUser({ email: uniqueEmail() });
+
+      const { state, error } = await authenticate({
+        headers: {
+          "x-auth-request-email": user.email!,
+          [EDGE_SECRET_HEADER]: EDGE_SECRET,
+        },
+        cookie: user.getSessionToken(),
+      });
+
+      expect(error).toBeUndefined();
+      expect(state.auth.user.id).toEqual(user.id);
+    });
+  });
+
   describe("corporate gate", () => {
     const CLIENT_ID = "outline-client";
     const CORPORATE_ID = "corp-42";
     const KID = "kid-1";
+    const USERNAME = "mpass-corp-1";
     const keyPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
     const otherKeyPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
     const jwks = {
@@ -1637,6 +1946,7 @@ describe("Authentication middleware - mPass edge trust", () => {
           client_id: CLIENT_ID,
           "custom:is_corporate": "true",
           "custom:corporate_id": CORPORATE_ID,
+          username: USERNAME,
           exp: Math.floor(Date.now() / 1000) + 300,
           ...overrides,
         },
@@ -1659,6 +1969,7 @@ describe("Authentication middleware - mPass edge trust", () => {
       };
       if (accessToken) {
         headers["x-auth-request-access-token"] = accessToken;
+        headers["x-auth-request-preferred-username"] = USERNAME;
       }
       return { user, ...(await authenticate({ headers })) };
     }
@@ -1904,23 +2215,50 @@ describe("Authentication middleware - mPass edge trust", () => {
 
     it("treats a whitespace-only SMB_CORPORATE_ID as unset", async () => {
       env.SMB_CORPORATE_ID = "   ";
-      const jwksHandler = serveJwks(() => HttpResponse.json(jwks));
+      serveJwks(() => HttpResponse.json(jwks));
 
-      const { error } = await edgeLogin();
+      const { error } = await edgeLogin(
+        token({ "custom:is_corporate": "false" })
+      );
 
       expect(error).toBeUndefined();
-      expect(jwksHandler).not.toHaveBeenCalled();
     });
 
-    it("reads no token and fetches no JWKS when SMB_CORPORATE_ID is unset", async () => {
-      env.SMB_CORPORATE_ID = "";
-      const jwksHandler = serveJwks(() => HttpResponse.json(jwks));
+    describe("with SMB_CORPORATE_ID unset", () => {
+      beforeEach(() => {
+        env.SMB_CORPORATE_ID = "";
+      });
 
-      const { user, state, error } = await edgeLogin("not-a-jwt");
+      it("reads no corporate claims", async () => {
+        serveJwks(() => HttpResponse.json(jwks));
 
-      expect(error).toBeUndefined();
-      expect(state.auth.user.id).toEqual(user.id);
-      expect(jwksHandler).not.toHaveBeenCalled();
+        const { user, state, error } = await edgeLogin(
+          token({ "custom:is_corporate": "false" })
+        );
+
+        expect(error).toBeUndefined();
+        expect(state.auth.user.id).toEqual(user.id);
+      });
+
+      it.each([
+        ["missing_token", undefined],
+        ["malformed", "not-a-jwt"],
+      ])(
+        "still refuses a login whose identity cannot be bound (%s)",
+        async (reason, accessToken) => {
+          serveJwks(() => HttpResponse.json(jwks));
+          const warn = vi.spyOn(Logger, "warn");
+
+          const { state, error } = await edgeLogin(accessToken);
+
+          expect(error).toHaveProperty("status", 401);
+          expect(state.auth).toBeUndefined();
+          expect(warn).toHaveBeenCalledWith(
+            "mPass proxy login refused",
+            expect.objectContaining({ reason })
+          );
+        }
+      );
     });
   });
 });

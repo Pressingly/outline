@@ -11,6 +11,7 @@ import {
   buildUser,
   buildViewer,
 } from "@server/test/factories";
+import { MpassTestIssuer } from "@server/test/mpassTokens";
 import { getTestServer } from "@server/test/support";
 
 const server = getTestServer();
@@ -147,6 +148,7 @@ describe("#apiKeys.create", () => {
 describe("#apiKeys.create via ForwardAuth", () => {
   let originalAuthType: typeof env.AUTH_TYPE;
   const edgeSecret = "e".repeat(64);
+  const mpass = new MpassTestIssuer();
 
   const uniqueEmail = () => `${randomString(10).toLowerCase()}@example.com`;
 
@@ -154,11 +156,13 @@ describe("#apiKeys.create via ForwardAuth", () => {
     originalAuthType = env.AUTH_TYPE;
     env.AUTH_TYPE = AUTH_TYPE_SSO;
     env.MPASS_EDGE_SECRET = edgeSecret;
+    mpass.install();
   });
 
   afterEach(() => {
     env.AUTH_TYPE = originalAuthType;
     env.MPASS_EDGE_SECRET = "";
+    mpass.uninstall();
   });
 
   it("should mint a key from the proxy header with the edge secret, as outline-mcp-server does", async () => {
@@ -168,6 +172,7 @@ describe("#apiKeys.create via ForwardAuth", () => {
     const res = await server.post("/api/apiKeys.create", {
       headers: {
         "X-Auth-Request-Email": email,
+        ...mpass.proofHeaders(email),
         "X-Mpass-Edge-Secret": edgeSecret,
       },
       body: { name: "moneta-mcp" },
@@ -177,6 +182,23 @@ describe("#apiKeys.create via ForwardAuth", () => {
     expect(res.status).toEqual(200);
     expect(body.data.userId).toEqual(user.id);
     expect(body.data.value).toMatch(/^ol_api_/);
+  });
+
+  it("should not mint a key for an email bound to another user's token", async () => {
+    const victim = await buildAdmin({ email: uniqueEmail() });
+
+    const res = await server.post("/api/apiKeys.create", {
+      headers: {
+        "X-Auth-Request-Email": victim.email!,
+        "X-Auth-Request-Preferred-Username": "victim-id",
+        "X-Auth-Request-Access-Token": mpass.accessToken("attacker-id"),
+        "X-Mpass-Edge-Secret": edgeSecret,
+      },
+      body: { name: "moneta-mcp" },
+    });
+
+    expect(res.status).toEqual(401);
+    expect(await ApiKey.count({ where: { userId: victim.id } })).toEqual(0);
   });
 
   it.each([
@@ -239,6 +261,7 @@ describe("#apiKeys.create via ForwardAuth", () => {
         headers: {
           ...headers,
           "X-Auth-Request-Email": attackerEmail,
+          ...mpass.proofHeaders(attackerEmail),
           "X-Mpass-Edge-Secret": edgeSecret,
         },
         body,

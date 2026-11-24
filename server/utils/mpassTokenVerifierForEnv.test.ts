@@ -14,8 +14,8 @@ describe("reportMpassMisconfiguration", () => {
     env.AUTH_TYPE = AUTH_TYPE_SSO;
     env.MPASS_EDGE_SECRET = USABLE_SECRET;
     env.SMB_CORPORATE_ID = "";
-    env.MPASS_COGNITO_ISSUER_URL = "";
-    env.MPASS_OIDC_CLIENT_ID = "";
+    env.MPASS_COGNITO_ISSUER_URL = "https://issuer.example.test/pool";
+    env.MPASS_OIDC_CLIENT_ID = "client";
   });
 
   afterEach(() => {
@@ -44,18 +44,22 @@ describe("reportMpassMisconfiguration", () => {
     ]);
   });
 
-  it("logs an error when the corporate gate is on without an issuer or client id", () => {
-    env.SMB_CORPORATE_ID = "corp-42";
+  it.each([
+    ["no issuer", "MPASS_COGNITO_ISSUER_URL"],
+    ["no client id", "MPASS_OIDC_CLIENT_ID"],
+  ] as const)(
+    "logs an error with %s, even with the corporate gate off",
+    (_label, setting) => {
+      env[setting] = "";
 
-    expect(errorMessages()).toEqual([
-      expect.stringContaining("SMB_CORPORATE_ID is set but no token issuer"),
-    ]);
-  });
+      expect(errorMessages()).toEqual([
+        expect.stringContaining("every mPass proxy login will be refused"),
+      ]);
+    }
+  );
 
   it("logs nothing for a complete configuration", () => {
     env.SMB_CORPORATE_ID = "corp-42";
-    env.MPASS_COGNITO_ISSUER_URL = "https://issuer.example.test/pool";
-    env.MPASS_OIDC_CLIENT_ID = "client";
 
     expect(errorMessages()).toEqual([]);
   });

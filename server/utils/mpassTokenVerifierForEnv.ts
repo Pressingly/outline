@@ -58,8 +58,9 @@ export function corporateIdIsPlaceholder(): boolean {
 
 /**
  * Logs an error at boot for an mPass configuration that fails closed: no
- * usable edge secret disables SSO login, and a corporate gate without a
- * token issuer or client id refuses every login.
+ * usable edge secret disables SSO login, and without a token issuer or client
+ * id no forwarded identity can be bound to its token, so every proxy login is
+ * refused.
  */
 export function reportMpassMisconfiguration(): void {
   if (env.AUTH_TYPE !== AUTH_TYPE_SSO) {
@@ -76,9 +77,10 @@ export function reportMpassMisconfiguration(): void {
       "SMB_CORPORATE_ID is a CHANGE_ME_ placeholder: every mPass login is refused",
       new Error("mPass corporate id placeholder")
     );
-  } else if (expectedCorporateId() && !mpassTokenVerifier().isConfigured) {
+  }
+  if (!mpassTokenVerifier().isConfigured) {
     Logger.error(
-      "SMB_CORPORATE_ID is set but no token issuer or client id is configured (MPASS_COGNITO_ISSUER_URL, MPASS_OIDC_CLIENT_ID): every mPass login will be refused",
+      "No mPass token issuer or client id is configured (MPASS_COGNITO_ISSUER_URL, MPASS_OIDC_CLIENT_ID): X-Auth-Request-Email cannot be bound to a verified token, so every mPass proxy login will be refused",
       new Error("mPass token verifier unconfigured")
     );
   }

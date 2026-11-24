@@ -28,6 +28,8 @@ import {
   EDGE_SECRET_HEADER,
   requestIsFromEdge,
 } from "@server/utils/mpassEdgeTrust";
+import { identityBindingRejection } from "@server/utils/mpassIdentityBinding";
+import type { IdentityBindingRejection } from "@server/utils/mpassIdentityBinding";
 import { InvalidMpassTokenError } from "@server/utils/MpassTokenVerifier";
 import type { MpassTokenRejection } from "@server/utils/MpassTokenVerifier";
 import {
@@ -448,11 +450,34 @@ const ALWAYS_FATAL: ReadonlySet<CorporateRejection> = new Set([
   "wrong_organization",
 ]);
 
+type ForwardedTokenRejection = MpassTokenRejection | "missing_token";
+
+/**
+ * The claims of the forwarded X-Auth-Request-Access-Token, verified against
+ * the trusted issuers' JWKS before any claim is read.
+ *
+ * @param ctx the request context.
+ * @returns the verified claims, or why the token was refused.
+ */
+async function verifiedForwardedClaims(
+  ctx: AppContext
+): Promise<{ claims: JwtPayload } | { rejection: ForwardedTokenRejection }> {
+  const accessToken = ctx.request.get(ACCESS_TOKEN_HEADER);
+  if (!accessToken) {
+    return { rejection: "missing_token" };
+  }
+  try {
+    return { claims: await mpassTokenVerifier().verify(accessToken) };
+  } catch (err) {
+    return {
+      rejection: err instanceof InvalidMpassTokenError ? err.reason : "invalid",
+    };
+  }
+}
+
 /**
  * Why the caller fails the SMB corporate gate, or undefined when it passes.
- * The forwarded token is verified against the trusted issuers' JWKS before
- * any claim is read. When SMB_CORPORATE_ID is unset the gate is off and no
- * token is read.
+ * When SMB_CORPORATE_ID is unset the gate is off and no token is read.
  *
  * @param ctx the request context forwarded by oauth2-proxy.
  * @param expected this deployment's SMB_CORPORATE_ID.
@@ -465,16 +490,11 @@ async function corporateRejection(
   if (corporateIdIsPlaceholder()) {
     return "placeholder_config";
   }
-  const accessToken = ctx.request.get(ACCESS_TOKEN_HEADER);
-  if (!accessToken) {
-    return "missing_token";
+  const verified = await verifiedForwardedClaims(ctx);
+  if ("rejection" in verified) {
+    return verified.rejection;
   }
-  try {
-    const claims = await mpassTokenVerifier().verify(accessToken);
-    return corporateClaimRejection(claims, expected);
-  } catch (err) {
-    return err instanceof InvalidMpassTokenError ? err.reason : "invalid";
-  }
+  return corporateClaimRejection(verified.claims, expected);
 }
 
 function isFatal(reason: CorporateRejection, mode: CorporateGateMode) {
@@ -503,6 +523,52 @@ async function enforceCorporateGate(
     return;
   }
   Logger.warn("mPass proxy login refused", logContext);
+  throw AuthenticationError("Access denied");
+}
+
+/**
+ * Why the forwarded email is not bound to the verified forwarded token, or
+ * undefined when it is (FOSS-836). Runs on every proxy login, whether or not
+ * the corporate gate is on, so the edge secret alone cannot assert an email.
+ *
+ * @param ctx the request context.
+ * @param rawEmail the raw X-Auth-Request-Email value.
+ * @returns the rejection reason, or undefined.
+ */
+async function identityBindingRefusal(
+  ctx: AppContext,
+  rawEmail: string
+): Promise<ForwardedTokenRejection | IdentityBindingRejection | undefined> {
+  const verified = await verifiedForwardedClaims(ctx);
+  if ("rejection" in verified) {
+    return verified.rejection;
+  }
+  return identityBindingRejection({
+    claims: verified.claims,
+    headers: {
+      email: rawEmail,
+      preferredUsername:
+        ctx.request.get("x-auth-request-preferred-username") ?? "",
+      user: ctx.request.get("x-auth-request-user") ?? "",
+    },
+    syntheticDomain: env.DEFAULT_EMAIL_DOMAIN,
+    normalizeEmail: normalizeProxyEmail,
+  });
+}
+
+async function enforceIdentityBinding(
+  ctx: AppContext,
+  rawEmail: string
+): Promise<void> {
+  const reason = await identityBindingRefusal(ctx, rawEmail);
+  if (!reason) {
+    return;
+  }
+  Logger.warn("mPass proxy login refused", {
+    reason,
+    mpassId: mpassIdForLogs(ctx),
+    path: ctx.path,
+  });
   throw AuthenticationError("Access denied");
 }
 
@@ -623,10 +689,10 @@ async function validateAuthentication(
     type = AuthenticationType.APP;
     service = FORWARDAUTH_SERVICE;
 
-    const email = normalizeProxyEmail(
-      token.slice(FORWARDED_TOKEN_PREFIX.length)
-    );
+    const rawEmail = token.slice(FORWARDED_TOKEN_PREFIX.length);
+    const email = normalizeProxyEmail(rawEmail);
     await enforceCorporateGate(ctx, "establish");
+    await enforceIdentityBinding(ctx, rawEmail);
     const { local: localPart, domain } = parseEmail(email);
 
     // A malformed forwarded email with no local part (e.g. "@example.com")

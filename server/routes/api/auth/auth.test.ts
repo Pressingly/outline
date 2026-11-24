@@ -11,6 +11,7 @@ import {
   buildUserPasskey,
   buildSubdomain,
 } from "@server/test/factories";
+import { MpassTestIssuer } from "@server/test/mpassTokens";
 import { getTestServer, setSelfHosted } from "@server/test/support";
 import { EDGE_SECRET_HEADER } from "@server/utils/mpassEdgeTrust";
 
@@ -75,15 +76,18 @@ describe("#auth.info", () => {
 
   describe("with an edge-verified ForwardAuth identity", () => {
     const edgeSecret = "e".repeat(64);
+    const mpass = new MpassTestIssuer();
 
     beforeEach(() => {
       env.AUTH_TYPE = AUTH_TYPE_SSO;
       env.MPASS_EDGE_SECRET = edgeSecret;
+      mpass.install();
     });
 
     afterEach(() => {
       env.AUTH_TYPE = undefined;
       env.MPASS_EDGE_SECRET = "";
+      mpass.uninstall();
     });
 
     it("should return the session and issue the session cookie", async () => {
@@ -91,6 +95,7 @@ describe("#auth.info", () => {
       const res = await server.post("/api/auth.info", {
         headers: {
           "x-auth-request-email": user.email!,
+          ...mpass.proofHeaders(user.email!),
           [EDGE_SECRET_HEADER]: edgeSecret,
         },
       });
