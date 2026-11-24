@@ -1,6 +1,6 @@
 import Router from "@koa/router";
 import { Op, Sequelize, type WhereOptions } from "sequelize";
-import { AuthorizationError } from "@server/errors";
+import { AuthorizationError, NotFoundError } from "@server/errors";
 import auth from "@server/middlewares/authentication";
 import { rateLimiter } from "@server/middlewares/rateLimiter";
 import { transaction } from "@server/middlewares/transaction";
@@ -16,6 +16,18 @@ import pagination from "../middlewares/pagination";
 import * as T from "./schema";
 
 const router = new Router();
+
+/**
+ * Returns whether the given token authenticates as the API key with the given id.
+ *
+ * @param token The raw API key token from the request.
+ * @param id The API key id to compare against.
+ * @returns true if the token belongs to that API key.
+ */
+async function isTokenForApiKey(token: string, id: string) {
+  const apiKey = await ApiKey.findByToken(token);
+  return apiKey?.id.toLowerCase() === id.toLowerCase();
+}
 
 router.post(
   "apiKeys.create",
@@ -126,11 +138,10 @@ router.post(
     const { user, type, token } = ctx.state.auth;
     const { transaction } = ctx.state;
 
-    if (type === AuthenticationType.API) {
-      const authenticatingKey = await ApiKey.findByToken(token);
-      if (authenticatingKey?.id !== id) {
-        throw AuthorizationError("An API key can only delete itself");
-      }
+    const isApiKeyAuth = type === AuthenticationType.API;
+
+    if (isApiKeyAuth && !(await isTokenForApiKey(token, id))) {
+      throw AuthorizationError("An API key can only delete itself");
     }
 
     const key = await ApiKey.scope("withUser").findByPk(id, {
@@ -140,7 +151,12 @@ router.post(
       },
       transaction,
     });
-    authorize(user, "delete", key);
+
+    if (!isApiKeyAuth) {
+      authorize(user, "delete", key);
+    } else if (!key) {
+      throw NotFoundError();
+    }
 
     await key.destroyWithCtx(ctx);
 

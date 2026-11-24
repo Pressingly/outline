@@ -1,11 +1,13 @@
 import { AUTH_TYPE_SSO } from "@shared/constants";
 import { randomString } from "@shared/random";
+import { TeamPreference } from "@shared/types";
 import env from "@server/env";
 import { ApiKey } from "@server/models";
 import {
   buildAdmin,
   buildApiKey,
   buildGuestUser,
+  buildOAuthAuthentication,
   buildUser,
   buildViewer,
 } from "@server/test/factories";
@@ -484,6 +486,92 @@ describe("#apiKeys.delete", () => {
 
     const res = await server.post("/api/apiKeys.delete", {
       headers: { Authorization: `Bearer ${apiKey.value}` },
+      body: { id: apiKey.id },
+    });
+    expect(res.status).toEqual(403);
+    expect(await ApiKey.findByPk(apiKey.id)).not.toBeNull();
+  });
+
+  it("should allow a full-scope api key to delete itself", async () => {
+    const apiKey = await buildApiKey();
+
+    const res = await server.post("/api/apiKeys.delete", {
+      headers: { Authorization: `Bearer ${apiKey.value}` },
+      body: { id: apiKey.id },
+    });
+    expect(res.status).toEqual(200);
+    expect(await ApiKey.findByPk(apiKey.id)).toBeNull();
+  });
+
+  it("should match the api key id case-insensitively", async () => {
+    const apiKey = await buildApiKey({
+      scope: ["read", "/api/apiKeys.delete"],
+    });
+
+    const res = await server.post("/api/apiKeys.delete", {
+      headers: { Authorization: `Bearer ${apiKey.value}` },
+      body: { id: apiKey.id.toUpperCase() },
+    });
+    expect(res.status).toEqual(200);
+    expect(await ApiKey.findByPk(apiKey.id)).toBeNull();
+  });
+
+  it("should allow an api key to delete itself when members cannot create api keys", async () => {
+    const user = await buildUser();
+    const apiKey = await buildApiKey({
+      userId: user.id,
+      scope: ["read", "/api/apiKeys.delete"],
+    });
+    user.team.setPreference(TeamPreference.MembersCanCreateApiKey, false);
+    await user.team.save();
+
+    const res = await server.post("/api/apiKeys.delete", {
+      headers: { Authorization: `Bearer ${apiKey.value}` },
+      body: { id: apiKey.id },
+    });
+    expect(res.status).toEqual(200);
+    expect(await ApiKey.findByPk(apiKey.id)).toBeNull();
+  });
+
+  it("should not allow a suspended user's api key to delete itself", async () => {
+    const user = await buildUser({ suspendedAt: new Date() });
+    const apiKey = await buildApiKey({
+      userId: user.id,
+      scope: ["read", "/api/apiKeys.delete"],
+    });
+
+    const res = await server.post("/api/apiKeys.delete", {
+      headers: { Authorization: `Bearer ${apiKey.value}` },
+      body: { id: apiKey.id },
+    });
+    expect(res.status).toEqual(403);
+    expect(await ApiKey.findByPk(apiKey.id)).not.toBeNull();
+  });
+
+  it("should not allow an admin's api key to delete another user's api key", async () => {
+    const admin = await buildAdmin();
+    const user = await buildUser({ teamId: admin.teamId });
+    const adminApiKey = await buildApiKey({ userId: admin.id });
+    const apiKey = await buildApiKey({ userId: user.id });
+
+    const res = await server.post("/api/apiKeys.delete", {
+      headers: { Authorization: `Bearer ${adminApiKey.value}` },
+      body: { id: apiKey.id },
+    });
+    expect(res.status).toEqual(403);
+    expect(await ApiKey.findByPk(apiKey.id)).not.toBeNull();
+  });
+
+  it("should not allow an oauth token", async () => {
+    const user = await buildUser();
+    const apiKey = await buildApiKey({ userId: user.id });
+    const authentication = await buildOAuthAuthentication({
+      user,
+      scope: ["write"],
+    });
+
+    const res = await server.post("/api/apiKeys.delete", {
+      headers: { Authorization: `Bearer ${authentication.accessToken}` },
       body: { id: apiKey.id },
     });
     expect(res.status).toEqual(403);
